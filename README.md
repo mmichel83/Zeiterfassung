@@ -37,7 +37,28 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 
 Die Zeiterfassung braucht einen Server, der aus dem Internet erreichbar ist, und eine eigene Adresse mit HTTPS, zum Beispiel `zeit.deine-firma.de`. Ohne HTTPS lassen sich Passwörter nicht sicher übertragen und die App nicht auf dem Handy installieren.
 
-### Variante A: kleiner eigener Server mit Docker (empfohlen)
+### Variante A: Railway (alles im Browser, auch vom Handy)
+
+Railway baut die App direkt aus diesem GitHub-Repo und kümmert sich um HTTPS. Kosten: Hobby-Tarif ab 5 $ im Monat.
+
+1. Auf [railway.com](https://railway.com) mit dem GitHub-Konto anmelden und den Hobby-Tarif wählen.
+2. **New Project** → **Deploy from GitHub repo** → `Zeiterfassung` wählen. Railway erkennt das Dockerfile und baut los.
+3. Im Dienst unter **Settings** als Region **EU West** wählen, damit die Daten in der EU liegen.
+4. Ein **Volume** anlegen, an den Dienst hängen und als Einhängepfad `/app/data` eintragen. Ohne Volume gehen die Daten bei jedem Update verloren.
+5. Unter **Variables** drei Einträge anlegen:
+   - `TRUST_PROXY` = `1`
+   - `RAILWAY_RUN_UID` = `0` (sonst darf die App nicht ins Volume schreiben)
+   - `SETUP_CODE` = ein selbst ausgedachter Code aus 8 bis 12 Buchstaben und Ziffern, nur für die Ersteinrichtung
+6. Unter **Settings → Networking** auf **Generate Domain** tippen. Fragt Railway nach dem Port, steht er in den Deploy-Logs in der Zeile, die mit `Zeiterfassung läuft:` beginnt.
+7. Die Adresse (`….up.railway.app`) öffnen und mit deinem `SETUP_CODE` einrichten. Am besten gleich, bevor jemand anderes die Adresse kennt.
+
+Eigene Adresse wie `zeit.deine-firma.de`: Unter Networking eine Custom Domain eintragen und beim Domain-Anbieter den angezeigten CNAME-Eintrag anlegen. Danach die Variable `PUBLIC_URL` auf diese Adresse setzen.
+
+Updates: Jede Änderung im Zweig `main` baut Railway automatisch neu. Die Daten im Volume bleiben erhalten.
+
+Railway ist ein US-Anbieter. Für die Arbeitszeitdaten der Mitarbeiter brauchst du einen Auftragsverarbeitungsvertrag mit dem Anbieter. Wer Daten lieber bei einem deutschen Anbieter hält, nimmt Variante B.
+
+### Variante B: eigener Server mit Docker
 
 Ein kleiner virtueller Server reicht völlig (1 CPU, 1–2 GB RAM, zum Beispiel bei Hetzner, IONOS oder Strato).
 
@@ -63,7 +84,7 @@ Caddy besorgt das HTTPS-Zertifikat automatisch. Die Daten liegen im Docker-Volum
 
 Updates einspielen: `git pull && docker compose up -d --build`
 
-### Variante B: Node-Hosting ohne Docker
+### Variante C: Node-Hosting ohne Docker
 
 Voraussetzung: Node.js ab Version 22.13 und ein Reverse Proxy mit HTTPS (Caddy, nginx, Apache) vor dem Port.
 
