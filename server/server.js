@@ -540,9 +540,11 @@ function createApp(opts = {}) {
     const t = now();
     const k = ZE.dateKey(t);
     const [mFrom] = ZE.monthRange(+k.slice(0, 4), +k.slice(5, 7));
+    const todays = db.tasksInRange(k, k);
     return {
       now: t,
       users: db.users().map((u) => {
+        const mine = todays.filter((x) => taskVisibleTo(x, u));
         const st = loadState(u);
         const ctx = ZE.makeContext(st, t);
         const d = ZE.daySummary(ctx, k);
@@ -562,10 +564,100 @@ function createApp(opts = {}) {
           vacationLeft: ZE.vacation(ctx, +k.slice(0, 4), k).left,
           monthMin: month.workMin,
           warnings: month.days.reduce((n, x) => n + x.warnings.filter((w) => w.code !== 'sunday').length, 0),
+          tasksOpen: mine.filter((x) => x.doneAt == null).length,
+          tasksDone: mine.filter((x) => x.doneAt != null).length,
         };
       }),
     };
   }, 'admin');
+
+  // ------------------------------------------------------------ Aufgaben
+  /** Leere Zuweisung heißt: für alle */
+  function taskVisibleTo(task, user) {
+    return !task.assignees.length || task.assignees.includes(user.id);
+  }
+  function publicTask(task) {
+    const by = task.doneBy ? db.user(task.doneBy) : null;
+    return { ...task, doneByName: by ? by.name : '' };
+  }
+  /** Freitext mit Zeilenumbrüchen */
+  const longText = (v, max) => String(v == null ? '' : v).replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, max);
+
+  function taskInput(b, old) {
+    const title = text(b.title !== undefined ? b.title : old && old.title, 120);
+    if (!title) fail(422, 'Bitte beschreib kurz, was zu tun ist.');
+    const day = String(b.day !== undefined ? b.day : old ? old.day : '');
+    if (!KEY_RE.test(day)) fail(422, 'Bitte einen Tag wählen.');
+    let projectId = b.projectId !== undefined ? (b.projectId ? String(b.projectId) : null) : old ? old.projectId : null;
+    if (projectId && !db.project(projectId)) fail(422, 'Dieses Projekt gibt es nicht mehr.');
+    let assignees = b.assignees !== undefined ? b.assignees : old ? old.assignees : [];
+    if (!Array.isArray(assignees) || assignees.length > 200) fail(422, 'Die Zuweisung ist ungültig.');
+    assignees = [...new Set(assignees.map(String))];
+    for (const id of assignees) if (!db.user(id)) fail(422, 'Einen der gewählten Mitarbeiter gibt es nicht.');
+    return {
+      ...(old || { id: ZE.uid(), doneAt: null, doneBy: null, doneNote: '', createdAt: now() }),
+      title,
+      details: longText(b.details !== undefined ? b.details : old && old.details, 1000),
+      projectId,
+      day,
+      assignees,
+    };
+  }
+
+  route('GET', '/api/tasks', (c) => {
+    const from = c.url.searchParams.get('from') || ZE.dateKey(now());
+    const to = c.url.searchParams.get('to') || from;
+    if (!KEY_RE.test(from) || !KEY_RE.test(to) || to < from) fail(400, 'Zeitraum ungültig.');
+    if (ZE.daysBetween(from, to).length > 62) fail(400, 'Der Zeitraum ist zu lang.');
+    const me = db.user(c.user.id);
+    let list = db.tasksInRange(from, to);
+    if (me.role !== 'admin' || c.url.searchParams.get('mine') === '1') list = list.filter((x) => taskVisibleTo(x, me));
+    return { tasks: list.map(publicTask) };
+  });
+
+  route('POST', '/api/tasks', (c) => {
+    const task = taskInput(c.body, null);
+    task.createdBy = c.user.id;
+    db.upsertTask(task);
+    return { task: publicTask(db.task(task.id)) };
+  }, 'admin');
+
+  route('PUT', '/api/tasks/:id', (c) => {
+    const old = db.task(c.params.id);
+    if (!old) fail(404, 'Diese Aufgabe gibt es nicht mehr.');
+    const task = taskInput(c.body, old);
+    db.upsertTask(task);
+    return { task: publicTask(db.task(task.id)) };
+  }, 'admin');
+
+  route('DELETE', '/api/tasks/:id', (c) => {
+    if (!db.task(c.params.id)) fail(404, 'Diese Aufgabe gibt es nicht mehr.');
+    db.deleteTask(c.params.id);
+    return { ok: true };
+  }, 'admin');
+
+  route('POST', '/api/tasks/:id/done', (c) => {
+    const task = db.task(c.params.id);
+    const me = db.user(c.user.id);
+    if (!task || (me.role !== 'admin' && !taskVisibleTo(task, me))) fail(404, 'Diese Aufgabe gibt es nicht mehr.');
+    if (task.doneAt != null) {
+      const by = task.doneBy ? db.user(task.doneBy) : null;
+      fail(409, `Schon erledigt${by ? ' von ' + by.name : ''} um ${ZE.timeOfDay(task.doneAt)}.`);
+    }
+    db.upsertTask({ ...task, doneAt: now(), doneBy: me.id, doneNote: longText(c.body.note, 500) });
+    return { task: publicTask(db.task(task.id)) };
+  });
+
+  route('POST', '/api/tasks/:id/reopen', (c) => {
+    const task = db.task(c.params.id);
+    const me = db.user(c.user.id);
+    if (!task || (me.role !== 'admin' && !taskVisibleTo(task, me))) fail(404, 'Diese Aufgabe gibt es nicht mehr.');
+    if (task.doneAt == null) return { task: publicTask(task) };
+    if (me.role !== 'admin' && task.doneBy !== me.id) fail(403, 'Diese Aufgabe hat jemand anderes erledigt. Wieder öffnen kann sie nur das Büro.');
+    db.upsertTask({ ...task, doneAt: null, doneBy: null, doneNote: '' });
+    return { task: publicTask(db.task(task.id)) };
+  });
 
   route('POST', '/api/users', (c) => {
     const name = validName(c.body.name);
@@ -675,12 +767,12 @@ function createApp(opts = {}) {
   }, 'admin');
 
   // ----------------------------------------------------- Export & Backup
-  function monthParam(c) {
+  function monthParam(c, allowFuture) {
     const m = MONTH_RE.exec(c.url.searchParams.get('month') || '');
     if (!m || +m[2] < 1 || +m[2] > 12) fail(400, 'Monat bitte als JJJJ-MM angeben.');
     const [from, to] = ZE.monthRange(+m[1], +m[2]);
     const k = ZE.dateKey(now());
-    if (from > k) fail(422, 'Dieser Monat hat noch nicht begonnen.');
+    if (from > k && !allowFuture) fail(422, 'Dieser Monat hat noch nicht begonnen.');
     return { from, to: to < k ? to : k, tag: m[0] };
   }
   const csvHeaders = (name) => ({
@@ -712,7 +804,7 @@ function createApp(opts = {}) {
         f(abs.urlaub), f(abs.krank), f(abs.frei), f(abs.abbau),
         r.days.reduce((n, d) => n + d.warnings.filter((w) => w.code !== 'sunday').length, 0), manual]);
     }
-    return { raw: '﻿' + ZE.toCSV(rows), headers: csvHeaders(`zeiterfassung-${tag}-uebersicht.csv`) };
+    return { raw: '\ufeff' + ZE.toCSV(rows), headers: csvHeaders(`zeiterfassung-${tag}-uebersicht.csv`) };
   }, 'admin');
 
   route('GET', '/api/export/entries.csv', (c) => {
@@ -725,7 +817,27 @@ function createApp(opts = {}) {
       if (lines.length <= 2) continue; // nur Kopf und Summe
       for (const l of lines.slice(1)) out.push(ZE.csvCell(ZE.csvText(u.name)) + ';' + l);
     }
-    return { raw: '﻿' + out.join('\r\n') + '\r\n', headers: csvHeaders(`zeiterfassung-${tag}-alle-eintraege.csv`) };
+    return { raw: '\ufeff' + out.join('\r\n') + '\r\n', headers: csvHeaders(`zeiterfassung-${tag}-alle-eintraege.csv`) };
+  }, 'admin');
+
+  route('GET', '/api/export/tasks.csv', (c) => {
+    const { from, tag } = monthParam(c, true);
+    const [, to] = ZE.monthRange(+tag.slice(0, 4), +tag.slice(5, 7));
+    const users = new Map(db.users().map((u) => [u.id, u]));
+    const projects = new Map(db.projects().map((p) => [p.id, p]));
+    const rows = [['Tag', 'Datum', 'Aufgabe', 'Details', 'Projekt', 'Kunde', 'Für', 'Erledigt', 'Erledigt von', 'Erledigt am', 'Notiz']];
+    for (const x of db.tasksOfMonth(from, to)) {
+      const p = projects.get(x.projectId);
+      const by = x.doneBy ? users.get(x.doneBy) : null;
+      rows.push([
+        ZE.WEEKDAYS_SHORT[ZE.weekday(x.day)], ZE.fmtDate(x.day), ZE.csvText(x.title), ZE.csvText(x.details.replace(/\n/g, ' / ')),
+        ZE.csvText(p ? p.name : ''), ZE.csvText(p ? p.client : ''),
+        ZE.csvText(x.assignees.length ? x.assignees.map((id) => (users.get(id) || {}).name || '').filter(Boolean).join(', ') : 'Alle'),
+        x.doneAt != null ? 'ja' : 'nein', ZE.csvText(by ? by.name : ''),
+        x.doneAt != null ? `${ZE.fmtDate(ZE.dateKey(x.doneAt))} ${ZE.timeOfDay(x.doneAt)}` : '', ZE.csvText(x.doneNote.replace(/\n/g, ' / ')),
+      ]);
+    }
+    return { raw: '\ufeff' + ZE.toCSV(rows), headers: csvHeaders(`zeiterfassung-${tag}-aufgaben.csv`) };
   }, 'admin');
 
   route('GET', '/api/backup', async (c) => {

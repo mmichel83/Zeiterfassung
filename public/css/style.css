@@ -469,6 +469,82 @@ small { font-size: 0.8125rem; }
 .print-head,
 .signatures { display: none; }
 
+/* ------------------------------------------------------------ Aufgaben */
+.tasks { margin-bottom: 1.75rem; }
+.tasks .timecard-head span { font-weight: 600; color: var(--stempel); }
+.tasks .timecard-head span.muted { color: var(--graphit-2); font-weight: 400; }
+.task-list,
+.admin-tasks { list-style: none; margin: 0; padding: 0; }
+.task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--linie);
+}
+.task-check {
+  position: relative;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0;
+  border: 2px solid var(--stempel);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.task--done .task-check { background: var(--stempel); }
+.task--done .task-check::after {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  top: 0.3rem;
+  width: 0.45rem;
+  height: 0.85rem;
+  border: solid var(--on-stempel);
+  border-width: 0 3px 3px 0;
+  transform: rotate(45deg);
+}
+.task-body { min-width: 0; }
+.task-body b { display: block; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.task--done .task-body b { color: var(--graphit-2); }
+.task-body small { display: block; color: var(--graphit-2); }
+.task-body small.neg { color: var(--signal); }
+.task-body .pname { font-size: 0.875rem; color: var(--graphit-2); }
+.task-details { margin: 0.25rem 0 0; white-space: pre-line; font-size: 0.9375rem; overflow-wrap: anywhere; }
+.tomorrow { margin-top: 0.25rem; }
+.tomorrow summary { cursor: pointer; color: var(--stempel); padding: 0.625rem 0; font-weight: 600; }
+.tomorrow .task-check { border-color: var(--linie); }
+
+.admin-tasks > li { border-top: 1px solid var(--linie); }
+.admin-tasks > li:last-child { border-bottom: 1px solid var(--linie); }
+.admin-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-task .task-check { width: 1.5rem; height: 1.5rem; margin-top: 0.125rem; cursor: inherit; }
+.admin-task.task--done .task-check::after { left: 0.4rem; top: 0.15rem; width: 0.35rem; height: 0.7rem; border-width: 0 2.5px 2.5px 0; }
+
+.day-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+.day-label { min-width: 10rem; text-align: center; font: 700 1.0625rem/1.25 var(--din); }
+.day-label small { display: block; font: 600 0.75rem/1.3 var(--text); color: var(--stempel); }
+
+.assign { border: 0; padding: 0; margin: 0 0 0.875rem; }
+.assign legend { font-size: 0.875rem; color: var(--graphit-2); margin-bottom: 0.5rem; padding: 0; }
+.assign .check { margin-bottom: 0.5rem; }
+.task-dlg { margin: 0 0 1rem; }
+
 /* ------------------------------------------------------------ Projekte */
 .projects { list-style: none; margin: 0; padding: 0; }
 .projects > li { border-top: 1px solid var(--linie); }
@@ -509,6 +585,7 @@ input[type=number],
 input[type=date],
 input[type=time],
 input:not([type]),
+textarea,
 select {
   display: block;
   width: 100%;
@@ -521,7 +598,9 @@ select {
   font: 1rem/1.3 var(--text);
 }
 dialog input,
+dialog textarea,
 dialog select { background: var(--karton); }
+textarea { resize: vertical; min-height: 4.5rem; line-height: 1.4; }
 select { appearance: auto; }
 
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }

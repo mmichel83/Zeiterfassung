@@ -105,8 +105,33 @@ function openDb(file) {
     db.exec('PRAGMA user_version = 1');
     db.exec('COMMIT');
   }
+  if (version < 2) {
+    db.exec('BEGIN');
+    db.exec(SCHEMA_V2);
+    db.exec('PRAGMA user_version = 2');
+    db.exec('COMMIT');
+  }
   return new Repo(db);
 }
+
+// Version 2: Aufgaben, die das Büro vorgibt und Mitarbeiter abhaken
+const SCHEMA_V2 = `
+CREATE TABLE tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  project_id TEXT,
+  day TEXT NOT NULL,
+  assignees TEXT NOT NULL DEFAULT '[]',
+  done_at INTEGER,
+  done_by TEXT,
+  done_note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  created_by TEXT
+);
+CREATE INDEX tasks_day ON tasks (day);
+CREATE INDEX tasks_open ON tasks (done_at, day);
+`;
 
 const json = (v, d) => {
   try { return JSON.parse(v); } catch (_) { return d; }
@@ -286,6 +311,37 @@ class Repo {
       .all(subjectId, limit || 200)
       .map((r) => ({ at: r.at, action: r.action, text: r.text, actorId: r.actor_id, actorName: r.actor_name || '' }));
   }
+
+  // ------------------------------------------------------------ Aufgaben
+  static task(r) {
+    return {
+      id: r.id, title: r.title, details: r.details, projectId: r.project_id || null, day: r.day,
+      assignees: json(r.assignees, []), doneAt: r.done_at == null ? null : r.done_at,
+      doneBy: r.done_by || null, doneNote: r.done_note, createdAt: r.created_at,
+    };
+  }
+  task(id) {
+    const r = this.s('SELECT * FROM tasks WHERE id = ?').get(id);
+    return r ? Repo.task(r) : null;
+  }
+  /** Aufgaben im Zeitraum plus alles, was davor noch offen ist */
+  tasksInRange(from, to) {
+    return this.s(`SELECT * FROM tasks WHERE (day BETWEEN ? AND ?) OR (day < ? AND done_at IS NULL)
+                   ORDER BY day, created_at`).all(from, to, from).map(Repo.task);
+  }
+  tasksOfMonth(from, to) {
+    return this.s('SELECT * FROM tasks WHERE day BETWEEN ? AND ? ORDER BY day, created_at').all(from, to).map(Repo.task);
+  }
+  upsertTask(t) {
+    this.s(`INSERT INTO tasks (id, title, details, project_id, day, assignees, done_at, done_by, done_note, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET title = excluded.title, details = excluded.details,
+            project_id = excluded.project_id, day = excluded.day, assignees = excluded.assignees,
+            done_at = excluded.done_at, done_by = excluded.done_by, done_note = excluded.done_note`)
+      .run(t.id, t.title, t.details || '', t.projectId || null, t.day, JSON.stringify(t.assignees || []),
+        t.doneAt == null ? null : t.doneAt, t.doneBy || null, t.doneNote || '', t.createdAt, t.createdBy || null);
+  }
+  deleteTask(id) { this.s('DELETE FROM tasks WHERE id = ?').run(id); }
 
   /** Konsistente Kopie der Datenbank (für Backups) */
   backupTo(file) {

@@ -4,7 +4,7 @@
  * Daten (/api/...) gehen immer direkt an den Server.
  */
 'use strict';
-const CACHE = 'zeiterfassung-v1';
+const CACHE = 'zeiterfassung-v2';
 const SHELL = [
   './',
   'index.html',
