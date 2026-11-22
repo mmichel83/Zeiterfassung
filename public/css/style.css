@@ -1122,3 +1122,115 @@ fieldset.offer legend { padding: 0 0.25rem; font-weight: 600; }
 input:disabled,
 select:disabled,
 textarea:disabled { opacity: 0.55; }
+
+/* --------------------------------------------------------- Checklisten */
+/* Lange Dialoge: Knöpfe bleiben unten sichtbar */
+.dlg-actions {
+  position: sticky;
+  bottom: -1rem;
+  margin: 0.5rem -1.125rem -1rem;
+  padding: 0.75rem 1.125rem 1rem;
+  background: var(--papier);
+  border-top: 1px solid var(--linie);
+}
+
+.task-lists { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.cl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.5rem;
+  padding: 0.375rem 0.75rem 0.375rem 0.5rem;
+  border: 1px solid var(--stempel);
+  border-radius: 3px;
+  background: var(--papier);
+  color: var(--stempel);
+  font: 600 0.9375rem/1.2 var(--text);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.cl-btn svg { width: 1.25rem; height: 1.25rem; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.cl-btn small { margin-left: 0.25rem; color: var(--graphit-2); font-weight: 400; }
+.cl-btn--done { background: var(--stempel); border-color: var(--stempel); color: var(--on-stempel); }
+.cl-btn--done small { color: inherit; }
+
+.cl-free { margin: -0.75rem 0 1.75rem; }
+.cl-free summary { cursor: pointer; padding: 0.5rem 0; font-weight: 600; color: var(--stempel); }
+
+.cl-progress { margin: 0 0 0.75rem; font: 700 1.125rem/1.3 var(--din); }
+.cl-sec {
+  margin: 1rem 0 0.25rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 2px solid var(--graphit);
+  font: 700 1rem/1.3 var(--din);
+}
+.cl-items { list-style: none; margin: 0; padding: 0; }
+.cl-items > li { border-bottom: 1px dashed var(--linie); }
+.cl-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.625rem 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.cl-item small { display: block; color: var(--graphit-2); font-size: 0.8125rem; }
+.cl-item input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 1.625rem;
+  height: 1.625rem;
+  margin: 0;
+  border: 2px solid var(--stempel);
+  border-radius: 3px;
+  background: var(--papier);
+  cursor: pointer;
+}
+.cl-item input:checked { background: var(--stempel); }
+.cl-item input:checked::after {
+  content: "";
+  position: absolute;
+  left: 0.45rem;
+  top: 0.15rem;
+  width: 0.4rem;
+  height: 0.8rem;
+  border: solid var(--on-stempel);
+  border-width: 0 3px 3px 0;
+  transform: rotate(45deg);
+}
+.cl-item input:checked + span { color: var(--graphit-2); text-decoration: line-through; text-decoration-thickness: 1px; }
+.cl-item input:focus-visible { outline: 2px solid var(--stempel); outline-offset: 2px; }
+
+.cl-admin { list-style: none; margin: 0 0 1.5rem; padding: 0; }
+.cl-admin > li { border-top: 1px solid var(--linie); }
+.cl-admin > li:last-child { border-bottom: 1px solid var(--linie); }
+.cl-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cl-row svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: var(--stempel); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.cl-row b { display: block; font-weight: 600; }
+.cl-row small { display: block; color: var(--graphit-2); }
+.cl-text { font-family: var(--text); line-height: 1.45; }
+
+fieldset.pack {
+  border: 1px solid var(--linie);
+  border-radius: 3px;
+  padding: 0.75rem 0.875rem 0.5rem;
+  margin: 0.75rem 0 1rem;
+}
+fieldset.pack legend { padding: 0 0.25rem; font-weight: 600; }
+fieldset.pack summary { cursor: pointer; font-weight: 600; color: var(--stempel); padding: 0.25rem 0 0.5rem; }
+fieldset.pack .check { margin-top: 0.25rem; }

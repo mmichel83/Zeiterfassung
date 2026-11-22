@@ -293,3 +293,38 @@ test('Baustelle: Angebot in Stunden und in Euro, Hochrechnung', () => {
   // zu wenig Fortschritt für eine Hochrechnung
   assert.equal(ZE.projectStatus({ budgetMin: 1200, progressPct: 5 }, { workedMin: 300 }).level, 'ok');
 });
+
+test('Checklisten: Zeilen, Überschriften, stabile Schlüssel', () => {
+  const p = ZE.parseChecklist('# Werkzeug\n- Leiter\n* Abdeckmaschine\n\n# Leer\n# Material\n[ ] Acryl\nAcryl\n- [x] Acrylspritze', 'L1');
+  assert.deepEqual(p.sections.map((x) => x.title), ['Werkzeug', 'Material']);
+  assert.deepEqual(p.sections[1].items.map((x) => x.text), ['Acryl', 'Acryl', 'Acrylspritze']);
+  assert.equal(p.count, 5);
+  const keys = p.sections.flatMap((x) => x.items.map((i) => i.key));
+  assert.equal(new Set(keys).size, 5); // gleiche Zeile zweimal: eigener Schlüssel
+  assert.ok(keys.every((k) => k.startsWith('L1:')));
+  // Schlüssel hängt am Text, nicht an der Position
+  const q = ZE.parseChecklist('Acrylspritze\nLeiter', 'L1');
+  assert.equal(q.sections[0].items[1].key, p.sections[0].items[0].key);
+  assert.deepEqual(ZE.checklistProgress(p, new Set([keys[0], keys[4], 'L1:fremd'])), { done: 2, total: 5 });
+  assert.deepEqual(ZE.checklistProgress(p, { [keys[1]]: 1 }), { done: 1, total: 5 });
+});
+
+test('Packliste aus der Beschreibung', () => {
+  const PACK = require('../public/js/packliste.js');
+  const r = PACK.suggest('Innenanstrich einer Whg mit Silikatfarbe');
+  assert.deepEqual(r.found, ['Innenräume', 'Wohnung', 'Anstrich', 'Silikatfarbe']);
+  for (const want of ['Abdeckmaschine', 'Acrylspritze', 'Acryl', 'Leiter', 'Silikat-Grundierung oder Fixativ zum Grundieren und Verdünnen', 'Augenspülflasche']) {
+    assert.ok(r.body.split('\n').includes(want), want);
+  }
+  assert.ok(!/Wandfarbe|Dispersionsfarbe/.test(r.body), 'keine andere Farbart');
+  assert.equal(r.body.split('\n').filter((l) => /^Schutzbrille/.test(l)).length, 1, 'Schutzbrille nur einmal');
+  const parsed = ZE.parseChecklist(r.body, 'eigen');
+  assert.equal(parsed.count, r.count);
+  assert.equal(parsed.sections[0].title, 'Vorher klären');
+
+  assert.match(PACK.suggest('Wohnzimmer streichen').body, /Wandfarbe: Menge und Farbton laut Auftrag/);
+  assert.deepEqual(PACK.suggest('Fassade streichen').found, ['Anstrich', 'Fassade']);
+  assert.ok(PACK.suggest('Wohnzimmer tapezieren, alte Tapete entfernen').found.includes('Alte Tapete runter'));
+  assert.ok(!PACK.suggest('Türkis streichen im Büro').found.includes('Türen'));
+  assert.deepEqual(PACK.suggest('Rechnung schreiben'), { body: '', found: [], count: 0 });
+});

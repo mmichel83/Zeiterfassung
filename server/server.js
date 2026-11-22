@@ -24,6 +24,7 @@ const { promisify } = require('node:util');
 const ZE = require('../public/js/logic.js');
 const { openDb } = require('./db.js');
 const push = require('./push.js');
+const VORLAGEN = require('./vorlagen.js');
 
 const scrypt = promisify(crypto.scrypt);
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -601,7 +602,8 @@ function createApp(opts = {}) {
   }
   function publicTask(task) {
     const by = task.doneBy ? db.user(task.doneBy) : null;
-    return { ...task, doneByName: by ? by.name : '' };
+    const any = task.checklists.length || task.checklistBody;
+    return { ...task, doneByName: by ? by.name : '', checks: any ? db.checksOf(task.id) : [] };
   }
   /** Freitext mit Zeilenumbrüchen */
   const longText = (v, max) => String(v == null ? '' : v).replace(/\r\n?/g, '\n')
@@ -618,6 +620,15 @@ function createApp(opts = {}) {
     if (!Array.isArray(assignees) || assignees.length > 200) fail(422, 'Die Zuweisung ist ungültig.');
     assignees = [...new Set(assignees.map(String))];
     for (const id of assignees) if (!db.user(id)) fail(422, 'Einen der gewählten Mitarbeiter gibt es nicht.');
+    let checklists = b.checklists !== undefined ? b.checklists : old ? old.checklists : [];
+    if (!Array.isArray(checklists) || checklists.length > 10) fail(422, 'Höchstens 10 Checklisten pro Aufgabe.');
+    checklists = [...new Set(checklists.map(String))];
+    for (const id of checklists) {
+      if (!db.checklist(id) && !(old && old.checklists.includes(id))) fail(422, 'Eine der gewählten Checklisten gibt es nicht mehr.');
+    }
+    // eigene Packliste nur für diese Aufgabe
+    const checklistBody = longText(b.checklistBody !== undefined ? b.checklistBody : old ? old.checklistBody : '', 8000);
+    if (ZE.parseChecklist(checklistBody, 'eigen').count > 300) fail(422, 'Höchstens 300 Punkte in der Packliste.');
     return {
       ...(old || { id: ZE.uid(), doneAt: null, doneBy: null, doneNote: '', createdAt: now() }),
       title,
@@ -625,6 +636,8 @@ function createApp(opts = {}) {
       projectId,
       day,
       assignees,
+      checklists,
+      checklistBody,
     };
   }
 
@@ -681,6 +694,71 @@ function createApp(opts = {}) {
     db.upsertTask({ ...task, doneAt: null, doneBy: null, doneNote: '' });
     return { task: publicTask(db.task(task.id)) };
   });
+
+  // Haken in einer Checkliste: gilt für alle, die die Aufgabe haben
+  route('POST', '/api/tasks/:id/checks', (c) => {
+    const task = db.task(c.params.id);
+    const me = db.user(c.user.id);
+    if (!task || (me.role !== 'admin' && !taskVisibleTo(task, me))) fail(404, 'Diese Aufgabe gibt es nicht mehr.');
+    const key = String(c.body.key || '');
+    const list = key.split(':')[0];
+    const known = list === 'eigen' ? !!task.checklistBody : task.checklists.includes(list);
+    if (!/^[A-Za-z0-9-]{1,64}:[a-z0-9]{1,8}(-\d{1,3})?$/.test(key) || !known) {
+      fail(422, 'Diesen Punkt gibt es in der Checkliste nicht.');
+    }
+    if (c.body.done) {
+      if (db.countChecks(task.id) >= 1000) fail(422, 'Zu viele Haken.');
+      db.setCheck(task.id, key, me.id, now());
+    } else db.clearCheck(task.id, key);
+    return { task: publicTask(db.task(task.id)) };
+  });
+
+  // ---------------------------------------------------------- Checklisten
+  function checklistInput(b, old) {
+    const title = text(b.title !== undefined ? b.title : old && old.title, 80);
+    if (!title) fail(422, 'Bitte gib der Checkliste einen Namen.');
+    const body = longText(b.body !== undefined ? b.body : old && old.body, 8000);
+    const parsed = ZE.parseChecklist(body, 'x');
+    if (!parsed.count) fail(422, 'Bitte trag mindestens einen Punkt ein, einen pro Zeile.');
+    if (parsed.count > 200) fail(422, 'Höchstens 200 Punkte pro Checkliste.');
+    const t = now();
+    return { ...(old || { id: ZE.uid(), createdAt: t }), title, body, updatedAt: t };
+  }
+
+  route('GET', '/api/checklists', () => ({ checklists: db.checklists() }));
+
+  route('POST', '/api/checklists', (c) => {
+    const cl = checklistInput(c.body, null);
+    db.upsertChecklist(cl);
+    return { checklist: db.checklist(cl.id), checklists: db.checklists() };
+  }, 'admin');
+
+  route('PUT', '/api/checklists/:id', (c) => {
+    const old = db.checklist(c.params.id);
+    if (!old) fail(404, 'Diese Checkliste gibt es nicht mehr.');
+    const cl = checklistInput(c.body, old);
+    db.upsertChecklist(cl);
+    return { checklist: db.checklist(cl.id), checklists: db.checklists() };
+  }, 'admin');
+
+  route('DELETE', '/api/checklists/:id', (c) => {
+    if (!db.checklist(c.params.id)) fail(404, 'Diese Checkliste gibt es nicht mehr.');
+    db.deleteChecklist(c.params.id);
+    return { checklists: db.checklists() };
+  }, 'admin');
+
+  /** Fügt die Vorlagen für Malerarbeiten ein, die es noch nicht gibt */
+  route('POST', '/api/checklists/vorlagen', () => {
+    const have = new Set(db.checklists().map((x) => x.title.toLowerCase()));
+    let added = 0;
+    for (const v of VORLAGEN) {
+      if (have.has(v.title.toLowerCase())) continue;
+      const t = now();
+      db.upsertChecklist({ id: ZE.uid(), title: v.title, body: v.body, createdAt: t, updatedAt: t });
+      added++;
+    }
+    return { added, checklists: db.checklists() };
+  }, 'admin');
 
   route('POST', '/api/users', (c) => {
     const name = validName(c.body.name);

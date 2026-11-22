@@ -311,7 +311,7 @@ test('Datenbank von Version 1 wird ohne Datenverlust erweitert', async () => {
   raw.close();
 
   const repo = openDb(file);
-  assert.equal(repo.db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(repo.db.prepare('PRAGMA user_version').get().user_version, 4);
   assert.equal(repo.user('u1').name, 'Alt');
   const p = repo.project('p1');
   assert.equal(p.name, 'Huber');
@@ -323,7 +323,7 @@ test('Datenbank von Version 1 wird ohne Datenverlust erweitert', async () => {
   repo.close();
   // zweites Öffnen ändert nichts mehr
   const again = openDb(file);
-  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, 4);
   again.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -514,5 +514,76 @@ test('Erinnerung bei vergessenem Ausstempeln und Wochenplan', async () => {
   assert.equal(t.data.sent, 1);
   await anna.emp('POST', '/api/push/unsubscribe', { endpoint: sub.body.endpoint });
   assert.equal((await anna.emp('POST', '/api/push/test', {})).status, 409);
+  await s.close();
+});
+
+test('Checklisten: Vorlagen, an Aufgaben hängen, gemeinsam abhaken', async () => {
+  const s = await start({ manualChecks: true });
+  const admin = await setupCompany(s);
+  const anna = await addEmployee(s, admin, 'Anna', 'anna');
+  const ben = await addEmployee(s, admin, 'Ben', 'ben');
+
+  // Vorlagen einfügen, zweimal fügt nichts doppelt ein
+  let r = await admin('POST', '/api/checklists/vorlagen', {});
+  assert.equal(r.status, 200);
+  assert.ok(r.data.added >= 5);
+  assert.equal((await admin('POST', '/api/checklists/vorlagen', {})).data.added, 0);
+  assert.equal((await anna.emp('POST', '/api/checklists/vorlagen', {})).status, 403);
+
+  // eigene Liste
+  assert.equal((await admin('POST', '/api/checklists', { title: 'Leer', body: '# nur Überschrift' })).status, 422);
+  r = await admin('POST', '/api/checklists', { title: 'Wohnzimmer', body: '- Leiter\n- Abdeckmaschine\n- Acrylspritze\n- Acryl' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const cl = r.data.checklist;
+  assert.equal((await anna.emp('POST', '/api/checklists', { title: 'X', body: 'a' })).status, 403);
+  const all = (await anna.emp('GET', '/api/checklists')).data.checklists;
+  assert.ok(all.some((x) => x.id === cl.id));
+
+  // Aufgabe für Anna mit Checkliste
+  assert.equal((await admin('POST', '/api/tasks', { title: 'Streichen', day: '2026-11-20', assignees: [anna.id], checklists: ['gibtsnicht'] })).status, 422);
+  r = await admin('POST', '/api/tasks', { title: 'Streichen', day: '2026-11-20', assignees: [anna.id], checklists: [cl.id] });
+  assert.equal(r.status, 200);
+  const task = r.data.task;
+  assert.deepEqual(task.checklists, [cl.id]);
+  assert.deepEqual(task.checks, []);
+
+  const items = ZE.parseChecklist(cl.body, cl.id).sections[0].items;
+  assert.deepEqual(items.map((x) => x.text), ['Leiter', 'Abdeckmaschine', 'Acrylspritze', 'Acryl']);
+  r = await anna.emp('POST', `/api/tasks/${task.id}/checks`, { key: items[0].key, done: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.task.checks[0].userName, 'Anna');
+  await anna.emp('POST', `/api/tasks/${task.id}/checks`, { key: items[0].key, done: true }); // doppelt schadet nicht
+  await anna.emp('POST', `/api/tasks/${task.id}/checks`, { key: items[3].key, done: true });
+  assert.equal((await anna.emp('POST', `/api/tasks/${task.id}/checks`, { key: 'fremd:abc', done: true })).status, 422);
+  assert.equal((await ben.emp('POST', `/api/tasks/${task.id}/checks`, { key: items[1].key, done: true })).status, 404);
+
+  // Büro sieht den Stand, Punkt wieder abwählen
+  let mine = (await anna.emp('GET', '/api/tasks?from=2026-11-20&to=2026-11-20&mine=1')).data.tasks;
+  assert.equal(ZE.checklistProgress(ZE.parseChecklist(cl.body, cl.id), Object.fromEntries(mine[0].checks.map((c) => [c.key, 1]))).done, 2);
+  await anna.emp('POST', `/api/tasks/${task.id}/checks`, { key: items[3].key, done: false });
+  mine = (await admin('GET', '/api/tasks?from=2026-11-20&to=2026-11-20')).data.tasks;
+  assert.deepEqual(mine[0].checks.map((c) => c.key), [items[0].key]);
+
+  // Text ändern: unveränderte Punkte behalten ihren Haken
+  await admin('PUT', `/api/checklists/${cl.id}`, { body: '# Mitnehmen\n- Leiter\n- Abdeckmaschine\n- Kartuschen' });
+  const after = ZE.parseChecklist((await admin('GET', '/api/checklists')).data.checklists.find((x) => x.id === cl.id).body, cl.id);
+  assert.equal(after.sections[0].title, 'Mitnehmen');
+  assert.equal(ZE.checklistProgress(after, new Set(mine[0].checks.map((c) => c.key))).done, 1);
+
+  // eigene Packliste für eine Aufgabe
+  r = await admin('POST', '/api/tasks', { title: 'Innenanstrich Whg Silikat', day: '2026-11-20', assignees: [], checklistBody: '- Leiter\n- Fixativ' });
+  const own = r.data.task;
+  assert.equal(own.checklistBody, '- Leiter\n- Fixativ');
+  const ownKey = ZE.parseChecklist(own.checklistBody, 'eigen').sections[0].items[1].key;
+  r = await ben.emp('POST', `/api/tasks/${own.id}/checks`, { key: ownKey, done: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.task.checks[0].userName, 'Ben');
+  assert.equal((await ben.emp('POST', `/api/tasks/${task.id}/checks`, { key: 'eigen:abc', done: true })).status, 404);
+  const plain = (await admin('POST', '/api/tasks', { title: 'Ohne', day: '2026-11-20' })).data.task;
+  assert.equal((await admin('POST', `/api/tasks/${plain.id}/checks`, { key: 'eigen:abc', done: true })).status, 422);
+
+  // Liste löschen: Aufgabe bleibt bearbeitbar
+  await admin('DELETE', `/api/checklists/${cl.id}`);
+  assert.equal((await admin('PUT', `/api/tasks/${task.id}`, { title: 'Streichen, 2. Anstrich' })).status, 200);
   await s.close();
 });

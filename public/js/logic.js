@@ -785,6 +785,61 @@
     };
   }
 
+  // ------------------------------------------------------------------
+  // Checklisten
+  // ------------------------------------------------------------------
+  /** Kurzer, stabiler Schlüssel für einen Text (FNV-1a) */
+  function textKey(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  /**
+   * Checkliste aus Text: ein Punkt pro Zeile, „# “ davor macht eine Überschrift.
+   * Jeder Punkt bekommt einen Schlüssel aus Listen-ID und Text, damit Haken
+   * erhalten bleiben, wenn das Büro andere Punkte ändert.
+   */
+  function parseChecklist(body, id) {
+    const sections = [];
+    const seen = new Map();
+    let cur = null;
+    let count = 0;
+    for (const raw of String(body || '').split('\n')) {
+      const line = raw.replace(/\s+/g, ' ').trim();
+      if (!line) continue;
+      const h = /^#+\s*(.*)$/.exec(line);
+      if (h) {
+        cur = { title: h[1], items: [] };
+        sections.push(cur);
+        continue;
+      }
+      const label = line.replace(/^[-*•]\s*(\[[ xX]?\]\s*)?/, '').replace(/^\[[ xX]?\]\s*/, '').trim();
+      if (!label) continue;
+      if (!cur) {
+        cur = { title: '', items: [] };
+        sections.push(cur);
+      }
+      const base = textKey(label.toLowerCase());
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      cur.items.push({ key: `${id || ''}:${base}${n > 1 ? '-' + n : ''}`, text: label });
+      count++;
+    }
+    return { sections: sections.filter((x) => x.items.length), count };
+  }
+
+  /** Wie viele Punkte einer Liste sind abgehakt? checks: Menge oder Objekt mit Schlüsseln */
+  function checklistProgress(parsed, checks) {
+    const has = (k) => (checks instanceof Set ? checks.has(k) : !!(checks && checks[k]));
+    let done = 0;
+    for (const sec of parsed.sections) for (const it of sec.items) if (has(it.key)) done++;
+    return { done, total: parsed.count };
+  }
+
   return {
     MIN, HOUR, STATES, ABSENCE_TYPES, COLORS, WEEKDAYS_SHORT, WEEKDAYS_LONG, MONTHS,
     pad, dateKey, parseKey, addDays, weekday, startOfWeek, isoWeek, daysBetween, monthRange,
@@ -793,6 +848,7 @@
     entryMs, entryNetMin, isOnBreak, runningEntry, presenceStart, buildIndex, absenceOn, makeContext,
     targetFor, daySummary, rangeSummary, balanceUntil, vacation, eta, applyStamp, overlaps, findOverlap,
     parseDecimal, parseMoney, fmtEUR, fmtNum, offerSum, projectProgress, projectStatus,
+    textKey, parseChecklist, checklistProgress,
     csvCell, csvText, toCSV, entriesCSV, daysCSV, absenceLabel,
     uid, defaultState, normalizeState,
   };
