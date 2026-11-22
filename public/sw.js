@@ -4,12 +4,13 @@
  * Daten (/api/...) gehen immer direkt an den Server.
  */
 'use strict';
-const CACHE = 'zeiterfassung-v3';
+const CACHE = 'zeiterfassung-v4';
 const SHELL = [
   './',
   'index.html',
   'css/style.css',
   'js/logic.js',
+  'js/packliste.js',
   'js/api.js',
   'js/app.js',
   'manifest.webmanifest',

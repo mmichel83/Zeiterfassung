@@ -15,6 +15,7 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 - Material eintragen: was, wie viel, Einheit, Preis wenn bekannt. Bekanntes Material wird vorgeschlagen.
 - Erinnerung aufs Handy, wenn man abends vergessen hat auszustempeln (iPhone: nur aus der App auf dem Home-Bildschirm)
 - Aufgaben vom Büro auf „Heute“ sehen und abhaken, auf Wunsch mit Notiz. Die Aufgaben für morgen stehen darunter.
+- Packliste und Checklisten zur Aufgabe abhaken: Was ist im Auto? Die Haken sieht das ganze Team, das an der Aufgabe arbeitet.
 - Zeiten nachtragen, Urlaub, Krankheit und Gleittage eintragen (wenn das Büro das erlaubt)
 - Zeitkonto, Wochenstand, voraussichtlicher Feierabend, Resturlaub
 - Eigener Monatsbericht als PDF oder CSV
@@ -26,6 +27,8 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 - Baustellen mit Adresse, Kontakt, Zugang und Angebot: in Stunden, als Fläche × Preis je m² oder als Angebotssumme
 - Auswertung je Baustelle: Stunden je Mitarbeiter, Kosten (Stunden × Stundensatz + Material), Fortschritt in m² oder Prozent, Hochrechnung bis zum Ende. Mitteilung ans Büro bei 80 %, bei absehbarer Überschreitung und beim Überschreiten. Dazu ein fertiger Text, um den Kunden zu informieren (WhatsApp, E-Mail, Teilen).
 - Wochenplan: wer ist wann wo, mit Urlaub und Krankheit. Ein Tipp auf Person und Tag legt die Aufgabe an.
+- Packliste aus der Beschreibung: „Innenanstrich einer Whg mit Silikatfarbe“ reicht, die App stellt Werkzeug, Material, Abdeckung und Schutzausrüstung zusammen (bei Silikat z. B. Fixativ, Augenschutz, Glas abdecken). Die Liste lässt sich vor dem Speichern ändern.
+- Feste Checklisten, etwa für jeden Morgen, Baustelle einrichten oder Feierabend. Elf Vorlagen für Malerarbeiten lassen sich mit einem Tipp einfügen und anpassen.
 - Aufgaben planen: was zu tun ist, mit Details (Farbe, Material, Schlüssel …), Baustelle, Tag und für wen. Offene Aufgaben wandern automatisch in den nächsten Tag. Export als CSV.
 - Mitarbeiter anlegen und per Link einladen (WhatsApp, E-Mail, Teilen). Der Link setzt auch vergessene Passwörter zurück.
 - Sollzeit pro Wochentag, Urlaubstage, Startdatum und Übertrag je Person
@@ -126,7 +129,8 @@ Dann <http://localhost:3000> öffnen. Der Einrichtungscode steht in der Ausgabe.
 2. **Mitarbeiter anlegen:** Team → „Mitarbeiter anlegen“. Name, Wochenstunden, Arbeitstage, Urlaubstage und das Datum eintragen, ab dem das Zeitkonto zählt.
 3. **Einladen:** Den Link per WhatsApp, E-Mail oder „Teilen“ aufs Handy schicken. Er gilt 7 Tage und nur einmal.
 4. **Baustellen:** Unter Baustellen anlegen, mit Adresse und Angebot. Unter Einstellungen → Firma den Stundensatz eintragen, dann vergleicht die App auch Angebote in Euro.
-5. **Erinnerungen:** Unter Einstellungen → Erinnerungen einschalten, dann kommen die Warnungen zu den Baustellen aufs Handy. Die Mitarbeiter schalten dort die Erinnerung ans Ausstempeln ein.
+5. **Checklisten:** Aufgaben → Checklisten → „Vorlagen einfügen“ und anpassen. Bei jeder Aufgabe schlägt die App die Packliste aus der Beschreibung vor.
+6. **Erinnerungen:** Unter Einstellungen → Erinnerungen einschalten, dann kommen die Warnungen zu den Baustellen aufs Handy. Die Mitarbeiter schalten dort die Erinnerung ans Ausstempeln ein.
 
 Wechselt jemand von einer anderen Zeiterfassung, trägst du unter Team → Person → Vertrag den bisherigen Stand als Übertrag ein (z. B. `+12:30`).
 
@@ -184,8 +188,9 @@ Keine Abhängigkeiten, nur Node.js ab 22.13 (für das eingebaute `node:sqlite`).
 
 ```
 public/            Oberfläche (läuft im Browser)
-  js/logic.js      Rechenkern: Feiertage, Soll/Ist, ArbZG, Stempeln, CSV
-                   (dieselbe Datei nutzt auch der Server)
+  js/logic.js      Rechenkern: Feiertage, Soll/Ist, ArbZG, Stempeln, CSV,
+                   Checklisten (dieselbe Datei nutzt auch der Server)
+  js/packliste.js  Fachwissen: Packliste aus der Aufgabenbeschreibung
   js/api.js        Verbindung zum Server
   js/app.js        Ansichten und Bedienung
   sw.js            Offline-Start der App, Mitteilungen
@@ -193,6 +198,7 @@ server/
   server.js        HTTP-Server, Anmeldung, Rechte, API, Erinnerungen
   db.js            Datenbank (SQLite)
   push.js          Web-Push (VAPID, RFC 8291) ohne Zusatzpakete
+  vorlagen.js      Checklisten-Vorlagen für Malerarbeiten
   backup.js        Backup über die Kommandozeile
 tests/             Tests für Rechenkern und Server
 ```
@@ -204,5 +210,5 @@ tests/             Tests für Rechenkern und Server
 - Fotos zu Aufgaben und Baustellen (vorher/nachher)
 - Anbindung an Malistor: Baustellen und Angebote werden von Hand eingetragen
 - Material ohne Netz eintragen: braucht Verbindung
-- Aufgaben ohne Netz abhaken: Die Liste ist offline sichtbar, das Abhaken braucht Verbindung.
+- Aufgaben und Packlisten ohne Netz abhaken: Die Listen sind offline sichtbar, das Abhaken braucht Verbindung (feste Checklisten ohne Aufgabe gehen auch offline).
 - Feiertage, die nur in einzelnen Gemeinden gelten: als „Sonderurlaub / bezahlt frei“ eintragen

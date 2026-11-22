@@ -117,6 +117,12 @@ function openDb(file) {
     db.exec('PRAGMA user_version = 3');
     db.exec('COMMIT');
   }
+  if (version < 4) {
+    db.exec('BEGIN');
+    db.exec(SCHEMA_V4);
+    db.exec('PRAGMA user_version = 4');
+    db.exec('COMMIT');
+  }
   return new Repo(db);
 }
 
@@ -137,6 +143,26 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_day ON tasks (day);
 CREATE INDEX tasks_open ON tasks (done_at, day);
+`;
+
+// Version 4: Checklisten, die das Büro an Aufgaben hängt
+const SCHEMA_V4 = `
+CREATE TABLE checklists (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+ALTER TABLE tasks ADD COLUMN checklists TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE tasks ADD COLUMN checklist_body TEXT NOT NULL DEFAULT '';
+CREATE TABLE task_checks (
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (task_id, key)
+);
 `;
 
 // Version 3: Baustellen-Infos, Material, Erinnerungen per Push
@@ -421,6 +447,8 @@ class Repo {
       id: r.id, title: r.title, details: r.details, projectId: r.project_id || null, day: r.day,
       assignees: json(r.assignees, []), doneAt: r.done_at == null ? null : r.done_at,
       doneBy: r.done_by || null, doneNote: r.done_note, createdAt: r.created_at,
+      checklists: json(r.checklists, []),
+      checklistBody: r.checklist_body || '',
     };
   }
   task(id) {
@@ -436,15 +464,46 @@ class Repo {
     return this.s('SELECT * FROM tasks WHERE day BETWEEN ? AND ? ORDER BY day, created_at').all(from, to).map(Repo.task);
   }
   upsertTask(t) {
-    this.s(`INSERT INTO tasks (id, title, details, project_id, day, assignees, done_at, done_by, done_note, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    this.s(`INSERT INTO tasks (id, title, details, project_id, day, assignees, done_at, done_by, done_note, created_at, created_by, checklists, checklist_body)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET title = excluded.title, details = excluded.details,
             project_id = excluded.project_id, day = excluded.day, assignees = excluded.assignees,
-            done_at = excluded.done_at, done_by = excluded.done_by, done_note = excluded.done_note`)
+            done_at = excluded.done_at, done_by = excluded.done_by, done_note = excluded.done_note,
+            checklists = excluded.checklists, checklist_body = excluded.checklist_body`)
       .run(t.id, t.title, t.details || '', t.projectId || null, t.day, JSON.stringify(t.assignees || []),
-        t.doneAt == null ? null : t.doneAt, t.doneBy || null, t.doneNote || '', t.createdAt, t.createdBy || null);
+        t.doneAt == null ? null : t.doneAt, t.doneBy || null, t.doneNote || '', t.createdAt, t.createdBy || null,
+        JSON.stringify(t.checklists || []), t.checklistBody || '');
   }
   deleteTask(id) { this.s('DELETE FROM tasks WHERE id = ?').run(id); }
+
+  // --------------------------------------------------------- Checklisten
+  static checklist(r) {
+    return { id: r.id, title: r.title, body: r.body, createdAt: r.created_at, updatedAt: r.updated_at };
+  }
+  checklists() {
+    return this.s('SELECT * FROM checklists ORDER BY title COLLATE NOCASE').all().map(Repo.checklist);
+  }
+  checklist(id) {
+    const r = this.s('SELECT * FROM checklists WHERE id = ?').get(id);
+    return r ? Repo.checklist(r) : null;
+  }
+  upsertChecklist(c) {
+    this.s(`INSERT INTO checklists (id, title, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET title = excluded.title, body = excluded.body, updated_at = excluded.updated_at`)
+      .run(c.id, c.title, c.body, c.createdAt, c.updatedAt);
+  }
+  deleteChecklist(id) { this.s('DELETE FROM checklists WHERE id = ?').run(id); }
+  checksOf(taskId) {
+    return this.s(`SELECT c.key, c.user_id, c.at, u.name AS user_name FROM task_checks c
+                   LEFT JOIN users u ON u.id = c.user_id WHERE c.task_id = ? ORDER BY c.at`)
+      .all(taskId).map((r) => ({ key: r.key, userId: r.user_id || null, userName: r.user_name || '', at: r.at }));
+  }
+  setCheck(taskId, key, userId, at) {
+    this.s(`INSERT INTO task_checks (task_id, key, user_id, at) VALUES (?, ?, ?, ?)
+            ON CONFLICT (task_id, key) DO NOTHING`).run(taskId, key, userId, at);
+  }
+  clearCheck(taskId, key) { this.s('DELETE FROM task_checks WHERE task_id = ? AND key = ?').run(taskId, key); }
+  countChecks(taskId) { return this.s('SELECT COUNT(*) AS n FROM task_checks WHERE task_id = ?').get(taskId).n; }
   tasksOfProject(projectId) {
     return this.s('SELECT * FROM tasks WHERE project_id = ? ORDER BY day DESC, created_at DESC LIMIT 300').all(projectId).map(Repo.task);
   }

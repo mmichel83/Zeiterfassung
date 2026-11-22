@@ -59,6 +59,7 @@
     myTasks: null,
     adminTasks: null,
     myMaterials: null,
+    checklists: null,
     matItems: [],
     units: ['Stück', 'l', 'kg', 'm', 'm²', 'Rolle', 'Eimer', 'Dose', 'Kartusche', 'Packung', 'Sack'],
     sites: null,
@@ -446,6 +447,7 @@
       ${siteCard(pid ? projectById(pid) : null)}
 
       ${tasksSection()}
+      ${freeListsSection()}
 
       <section class="timecard" aria-labelledby="tc-h">
         <div class="timecard-head"><h2 id="tc-h">Stempelkarte</h2><span class="num">${Z.fmtDate(k)}</span></div>
@@ -905,6 +907,7 @@
         ${p ? `<button type="button" class="pname pname--link" data-act="siteInfo" data-id="${esc(p.id)}"><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}${p.address ? `<small>${esc(firstLine(p.address))}</small>` : ''}</button>` : ''}
         ${late ? `<small class="neg">offen seit ${esc(shortDate(t.day))}</small>` : ''}
         ${t.details ? `<p class="task-details">${esc(t.details)}</p>` : ''}
+        ${taskListButtons(t)}
         ${done ? `<small class="done-text">${esc(doneText(t))}</small>` : ''}
       </div>
     </li>`;
@@ -920,10 +923,256 @@
       <span class="task-body">
         <b>${esc(t.title)}</b>
         <small>${p ? esc(p.name) + ', ' : ''}für ${esc(names)}</small>
+        ${taskListSummary(t)}
         ${late ? `<small class="neg">offen seit ${esc(shortDate(t.day))}</small>` : ''}
         ${done ? `<small class="done-text">${esc(doneText(t))}</small>` : ''}
       </span>
     </button></li>`;
+  }
+
+  // ------------------------------------------------------------------
+  // Checklisten und Packlisten
+  // ------------------------------------------------------------------
+  const PACK = window.PACK;
+  const ICON_LIST = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6.5h10M10 12h10M10 17.5h10"/><path d="M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5l1.5 1.5 2.5-3"/></svg>';
+  const parsedCache = new Map();
+  function parsedList(id, body) {
+    const k = id + '\u0000' + body;
+    let p = parsedCache.get(k);
+    if (!p) {
+      if (parsedCache.size > 200) parsedCache.clear();
+      p = Z.parseChecklist(body, id);
+      parsedCache.set(k, p);
+    }
+    return p;
+  }
+  const clById = (id) => (ui.checklists || []).find((x) => x.id === id) || null;
+  const checkSet = (t) => new Set((t.checks || []).map((c) => c.key));
+
+  /** Listen einer Aufgabe: eigene Packliste zuerst, dann die festen Checklisten */
+  function listsOfTask(t) {
+    const out = [];
+    if (t.checklistBody) {
+      const parsed = parsedList('eigen', t.checklistBody);
+      if (parsed.count) out.push({ id: 'eigen', title: 'Packliste', parsed });
+    }
+    for (const id of t.checklists || []) {
+      const cl = clById(id);
+      if (cl) out.push({ id, title: cl.title, parsed: parsedList(id, cl.body) });
+    }
+    return out;
+  }
+
+  function taskListButtons(t) {
+    const lists = listsOfTask(t);
+    if (!lists.length) return '';
+    const set = checkSet(t);
+    return `<div class="task-lists">${lists.map((l) => {
+      const pr = Z.checklistProgress(l.parsed, set);
+      return `<button type="button" class="cl-btn${pr.total && pr.done === pr.total ? ' cl-btn--done' : ''}" data-act="openList" data-task="${esc(t.id)}" data-id="${esc(l.id)}">
+        ${ICON_LIST}<span>${esc(l.title)}</span><small class="num">${pr.done}/${pr.total}</small></button>`;
+    }).join('')}</div>`;
+  }
+  function taskListSummary(t) {
+    const lists = listsOfTask(t);
+    if (!lists.length) return '';
+    const set = checkSet(t);
+    let done = 0;
+    let total = 0;
+    for (const l of lists) {
+      const pr = Z.checklistProgress(l.parsed, set);
+      done += pr.done;
+      total += pr.total;
+    }
+    return `<small>${lists.length === 1 ? esc(lists[0].title) : 'Checklisten'}: ${done} von ${total} dabei</small>`;
+  }
+
+  // Feste Checklisten ohne Aufgabe: Haken nur auf diesem Handy und nur für heute
+  function freeChecks() {
+    const st = store.get('ze.clfree', null);
+    return st && st.day === todayKey() ? st : { day: todayKey(), keys: [] };
+  }
+  function setFreeCheck(key, on) {
+    const st = freeChecks();
+    const keys = new Set(st.keys);
+    if (on) keys.add(key);
+    else keys.delete(key);
+    store.set('ze.clfree', { day: st.day, keys: [...keys] });
+  }
+  function freeListsSection() {
+    const lists = ui.checklists || [];
+    if (!lists.length) return '';
+    const keys = new Set(freeChecks().keys);
+    return `<details class="cl-free">
+      <summary>Checklisten <span class="muted">(${lists.length})</span></summary>
+      <div class="task-lists">${lists.map((cl) => {
+        const pr = Z.checklistProgress(parsedList(cl.id, cl.body), keys);
+        return `<button type="button" class="cl-btn${pr.total && pr.done === pr.total ? ' cl-btn--done' : ''}" data-act="openList" data-id="${esc(cl.id)}">
+          ${ICON_LIST}<span>${esc(cl.title)}</span><small class="num">${pr.done ? pr.done + '/' : ''}${pr.total}</small></button>`;
+      }).join('')}</div>
+    </details>`;
+  }
+
+  function findTask(id) {
+    for (const list of [ui.myTasks, ui.adminTasks, ui.plan && ui.plan.tasks]) {
+      const t = (list || []).find((x) => x.id === id);
+      if (t) return t;
+    }
+    return null;
+  }
+
+  /** Checkliste zum Abhaken öffnen: zu einer Aufgabe (gemeinsam) oder frei (nur dieses Handy) */
+  function openList(taskId, listId) {
+    const task = taskId ? findTask(taskId) : null;
+    let title;
+    let parsed;
+    if (task) {
+      const l = listsOfTask(task).find((x) => x.id === listId);
+      if (!l) return;
+      title = l.title;
+      parsed = l.parsed;
+    } else {
+      const cl = clById(listId);
+      if (!cl) return;
+      title = cl.title;
+      parsed = parsedList(cl.id, cl.body);
+    }
+    const isOn = (key) => (task ? task.checks.some((c) => c.key === key) : freeChecks().keys.includes(key));
+    const who = (key) => {
+      const c = task && task.checks.find((x) => x.key === key);
+      return c && c.userId !== session.user.id ? `<small>${esc(c.userName || 'jemand')}, ${Z.timeOfDay(c.at)}</small>` : '';
+    };
+    const progress = () => {
+      const pr = Z.checklistProgress(parsed, task ? checkSet(task) : new Set(freeChecks().keys));
+      return pr.done === pr.total ? `Alles dabei, ${pr.total} von ${pr.total}` : `${pr.done} von ${pr.total} dabei`;
+    };
+    const dlg = openDialog({
+      title,
+      cancel: 'Fertig',
+      body: `
+        ${task ? `<p class="muted">${esc(task.title)}${task.day !== todayKey() ? ', ' + esc(shortDate(task.day)) : ''}</p>`
+          : '<p class="help">Die Haken gelten nur heute und nur auf diesem Handy.</p>'}
+        <p class="cl-progress" data-cl-progress>${esc(progress())}</p>
+        ${parsed.sections.map((sec) => `
+          ${sec.title ? `<h3 class="cl-sec">${esc(sec.title)}</h3>` : ''}
+          <ul class="cl-items">${sec.items.map((it) => `<li><label class="cl-item">
+            <input type="checkbox" data-key="${esc(it.key)}" ${isOn(it.key) ? 'checked' : ''}>
+            <span>${esc(it.text)}${who(it.key)}</span></label></li>`).join('')}</ul>`).join('')}
+        ${task ? '' : '<p><button type="button" class="link-btn" data-cl-reset>Alle Haken entfernen</button></p>'}`,
+    });
+    const upd = () => { $('[data-cl-progress]', dlg).textContent = progress(); };
+    dlg.addEventListener('close', () => render(), { once: true });
+    $$('input[data-key]', dlg).forEach((box) => box.addEventListener('change', async () => {
+      const key = box.dataset.key;
+      const on = box.checked;
+      if (!task) {
+        setFreeCheck(key, on);
+        upd();
+        return;
+      }
+      // sofort anzeigen, dann speichern
+      const before = task.checks;
+      task.checks = before.filter((c) => c.key !== key);
+      if (on) task.checks.push({ key, userId: session.user.id, userName: session.user.name, at: now() });
+      upd();
+      try {
+        const r = await call('POST', `/api/tasks/${encodeURIComponent(task.id)}/checks`, { key, done: on });
+        task.checks = r.task.checks;
+        upd();
+      } catch (err) {
+        task.checks = before;
+        box.checked = !on;
+        upd();
+        if (!err.handled) toast(errText(err));
+      }
+    }));
+    const reset = $('[data-cl-reset]', dlg);
+    if (reset) {
+      reset.addEventListener('click', () => {
+        for (const sec of parsed.sections) for (const it of sec.items) setFreeCheck(it.key, false);
+        $$('input[data-key]', dlg).forEach((b) => { b.checked = false; });
+        upd();
+      });
+    }
+  }
+
+  // ---- Verwaltung im Büro
+  function setChecklists(list) {
+    ui.checklists = list;
+    store.set('ze.checklists', list);
+  }
+  async function loadChecklists() {
+    if (!session) return;
+    try {
+      setChecklists((await call('GET', '/api/checklists')).checklists);
+    } catch (_) {
+      if (!ui.checklists) ui.checklists = store.get('ze.checklists', []);
+    }
+  }
+
+  function viewChecklists() {
+    const list = ui.checklists;
+    if (!list) return '<p class="empty">Lädt …</p>';
+    return `
+      <p class="help">Schreib bei einer Aufgabe einfach, was zu tun ist, zum Beispiel „Innenanstrich Whg mit Silikatfarbe“. Die App stellt die Packliste dazu selbst zusammen. Hier legst du zusätzlich feste Listen an, etwa für jeden Morgen oder den Feierabend.</p>
+      <div class="actions"><button type="button" class="btn btn--primary" data-act="newList">Checkliste anlegen</button></div>
+      ${list.length ? `<ul class="cl-admin">${list.map((cl) => {
+        const p = parsedList(cl.id, cl.body);
+        const secs = p.sections.map((x) => x.title).filter(Boolean);
+        return `<li><button type="button" class="cl-row" data-act="editList" data-id="${esc(cl.id)}">${ICON_LIST}
+          <span><b>${esc(cl.title)}</b><small>${p.count} Punkte${secs.length ? ': ' + esc(secs.join(', ')) : ''}</small></span></button></li>`;
+      }).join('')}</ul>` : '<p class="empty">Noch keine festen Checklisten.</p>'}
+      <section class="report-sec"><h2>Vorlagen</h2>
+        <p class="help">Fertige Listen für Malerarbeiten: jeden Tag, Baustelle einrichten, Feierabend, Innenanstrich, Fassade, Tapezieren, Lackieren, Spachteln, Holz außen, Bodenbeschichtung und Schimmel. Fehlende kommen dazu, deine eigenen bleiben, wie sie sind.</p>
+        <div class="actions"><button type="button" class="btn" data-act="addVorlagen">Vorlagen einfügen</button></div>
+      </section>`;
+  }
+
+  function openListDialog(id) {
+    const cl = id ? clById(id) : null;
+    if (id && !cl) return;
+    openDialog({
+      title: cl ? 'Checkliste bearbeiten' : 'Checkliste anlegen',
+      submit: cl ? 'Speichern' : 'Anlegen',
+      body: `
+        <label class="field"><span>Name</span><input type="text" name="title" maxlength="80" value="${esc(cl ? cl.title : '')}" placeholder="z. B. Jeden Morgen"></label>
+        <label class="field"><span>Punkte, einer pro Zeile</span>
+          <textarea name="body" rows="14" class="cl-text" placeholder="# Werkzeug&#10;Leiter&#10;Abdeckmaschine&#10;Acrylspritze&#10;# Material&#10;Acryl">${esc(cl ? cl.body : '')}</textarea></label>
+        <p class="help">Eine Zeile mit # davor wird zur Überschrift, zum Beispiel „# Werkzeug“.</p>`,
+      onSubmit: async (fd) => {
+        const title = String(fd.get('title') || '').trim();
+        if (!title) return 'Bitte gib der Checkliste einen Namen.';
+        const body = String(fd.get('body') || '');
+        if (!Z.parseChecklist(body, 'x').count) return 'Bitte trag mindestens einen Punkt ein, einen pro Zeile.';
+        const r = cl ? await call('PUT', '/api/checklists/' + encodeURIComponent(cl.id), { title, body })
+          : await call('POST', '/api/checklists', { title, body });
+        setChecklists(r.checklists);
+        render();
+        toast(cl ? 'Checkliste gespeichert' : `Checkliste „${title}“ angelegt`);
+        return null;
+      },
+      del: cl ? async () => {
+        const r = await call('DELETE', '/api/checklists/' + encodeURIComponent(cl.id));
+        setChecklists(r.checklists);
+        render();
+        toast('Checkliste gelöscht');
+        return null;
+      } : null,
+    });
+  }
+
+  /** Packliste im Aufgaben-Dialog aus Titel und Details vorschlagen */
+  function packFromForm(form, force) {
+    const ta = $('[data-pack]', form);
+    if (!ta) return;
+    const r = PACK.suggest(`${form.elements.title.value} ${form.elements.details.value}`);
+    if (force) delete ta.dataset.touched;
+    if (!ta.dataset.touched) ta.value = r.body;
+    const n = Z.parseChecklist(ta.value, 'eigen').count;
+    $('[data-live=pack-sum]', form).textContent = n ? `Packliste ansehen und ändern, ${n} Punkte` : 'Packliste selbst schreiben';
+    $('[data-live=pack-hint]', form).textContent = r.found.length
+      ? `Erkannt: ${r.found.join(', ')}.${ta.dataset.touched ? ' Die Liste ist von Hand geändert.' : ''}`
+      : 'Schreib oben, was zu tun ist, zum Beispiel „Innenanstrich Whg mit Silikatfarbe“. Dann stellt die App zusammen, was mitmuss.';
   }
 
   function viewTasks() {
@@ -935,7 +1184,9 @@
     const mode = `<div class="seg" role="group" aria-label="Ansicht">
         <button type="button" data-act="tasksMode" data-mode="day" aria-pressed="${ui.tasksMode === 'day'}">Tag</button>
         <button type="button" data-act="tasksMode" data-mode="week" aria-pressed="${ui.tasksMode === 'week'}">Woche</button>
+        <button type="button" data-act="tasksMode" data-mode="lists" aria-pressed="${ui.tasksMode === 'lists'}">Checklisten</button>
       </div>`;
+    if (ui.tasksMode === 'lists') return `<header class="page-head"><h1>Aufgaben</h1></header>${mode}${viewChecklists()}`;
     if (ui.tasksMode === 'week') {
       return `<header class="page-head"><h1>Aufgaben</h1></header>${mode}
         <div class="actions"><button type="button" class="btn btn--primary" data-act="newTask">Aufgabe anlegen</button></div>
@@ -1031,11 +1282,13 @@
     if (id && !t) return;
     if (!ui.team) await loadTeam();
     const pre = preset || {};
+    if (!ui.checklists) await loadChecklists();
+    const fixed = ui.checklists || [];
     const people = (ui.team || []).filter((u) => u.active || (t && t.assignees.includes(u.id)));
     const all = t ? !t.assignees.length : !pre.userId;
     const picked = t ? t.assignees : pre.userId ? [pre.userId] : [];
     const done = t && t.doneAt != null;
-    openDialog({
+    const dlg = openDialog({
       title: t ? 'Aufgabe bearbeiten' : 'Aufgabe anlegen',
       submit: t ? 'Speichern' : 'Anlegen',
       body: `
@@ -1051,6 +1304,15 @@
           <label class="check"><input type="checkbox" name="all" data-assign-all ${all ? 'checked' : ''}><span>Alle</span></label>
           ${people.map((u) => `<label class="check"><input type="checkbox" name="a" value="${esc(u.id)}" data-assign-one ${!all && picked.includes(u.id) ? 'checked' : ''}><span>${esc(u.name)}</span></label>`).join('')}
         </fieldset>
+        <fieldset class="pack"><legend>Was muss mit?</legend>
+          <p class="help" data-live="pack-hint"></p>
+          <details><summary data-live="pack-sum"></summary>
+            <textarea name="pack" rows="12" class="cl-text" data-pack ${t ? 'data-touched="1"' : ''} placeholder="Ein Punkt pro Zeile, # davor für Überschriften">${esc(t ? t.checklistBody : '')}</textarea>
+            <div class="actions"><button type="button" class="btn btn--quiet" data-pack-suggest>Neu vorschlagen</button></div>
+          </details>
+          ${fixed.length ? `<details ${t && t.checklists.length ? 'open' : ''}><summary>Dazu feste Checklisten${t && t.checklists.length ? `, ${t.checklists.length} gewählt` : ''}</summary>
+            ${fixed.map((cl) => `<label class="check"><input type="checkbox" name="cl" value="${esc(cl.id)}" ${t && t.checklists.includes(cl.id) ? 'checked' : ''}><span>${esc(cl.title)}</span></label>`).join('')}</details>` : ''}
+        </fieldset>
         ${t ? `<label class="check"><input type="checkbox" name="done" ${done ? 'checked' : ''}><span>Erledigt${done ? `<small>${esc(doneText(t))}</small>` : ''}</span></label>` : ''}`,
       onSubmit: async (fd) => {
         const title = String(fd.get('title') || '').trim();
@@ -1060,6 +1322,7 @@
         const body = {
           title, details: String(fd.get('details') || ''), day: String(fd.get('day') || ''),
           projectId: String(fd.get('project') || '') || null, assignees,
+          checklistBody: String(fd.get('pack') || ''), checklists: fd.getAll('cl').map(String),
         };
         const r = t ? await call('PUT', `/api/tasks/${encodeURIComponent(t.id)}`, body) : await call('POST', '/api/tasks', body);
         if (t && (fd.get('done') === 'on') !== done) {
@@ -1079,6 +1342,9 @@
         return null;
       } : null,
     });
+    const form = $('form', dlg);
+    packFromForm(form, false);
+    $('[data-pack-suggest]', dlg).addEventListener('click', () => packFromForm(form, true));
   }
 
   // ------------------------------------------------------------------
@@ -2311,7 +2577,7 @@ ${session.user.name}${session.company.name ? '\n' + session.company.name : ''}`;
     }
     if (v === 'aufgaben') {
       if (!ui.planWeek) ui.planWeek = Z.startOfWeek(todayKey());
-      await Promise.all([loadTeam(), ui.tasksMode === 'week' ? loadPlan() : loadAdminTasks()]);
+      await Promise.all([loadTeam(), loadChecklists(), ui.tasksMode === 'week' ? loadPlan() : ui.tasksMode === 'day' ? loadAdminTasks() : null]);
       render();
     }
     if (v === 'baustellen') {
@@ -2319,7 +2585,7 @@ ${session.user.name}${session.company.name ? '\n' + session.company.name : ''}`;
       render();
     }
     if (v === 'heute') {
-      await Promise.all([loadMyTasks(), loadMyMaterials()]);
+      await Promise.all([loadMyTasks(), loadMyMaterials(), loadChecklists()]);
       render();
     }
     if (v === 'einstellungen' && !ui.push) {
@@ -2352,7 +2618,10 @@ ${session.user.name}${session.company.name ? '\n' + session.company.name : ''}`;
     newTask: () => openTaskDialog(null, ui.tasksMode === 'week' ? { day: ui.planWeek } : null),
     tasksMode: async (el) => {
       ui.tasksMode = el.dataset.mode;
-      if (ui.tasksMode === 'week') {
+      if (ui.tasksMode === 'lists') {
+        render();
+        await loadChecklists();
+      } else if (ui.tasksMode === 'week') {
         if (!ui.planWeek) ui.planWeek = Z.startOfWeek(ui.tasksDay || todayKey());
         render();
         await loadPlan();
@@ -2370,6 +2639,19 @@ ${session.user.name}${session.company.name ? '\n' + session.company.name : ''}`;
       render();
     },
     planAdd: (el) => openTaskDialog(null, { day: el.dataset.day, userId: el.dataset.user }),
+    openList: (el) => openList(el.dataset.task || null, el.dataset.id),
+    newList: () => openListDialog(null),
+    editList: (el) => openListDialog(el.dataset.id),
+    addVorlagen: async () => {
+      try {
+        const r = await call('POST', '/api/checklists/vorlagen', {});
+        setChecklists(r.checklists);
+        render();
+        toast(r.added ? `${r.added} Vorlagen eingefügt` : 'Alle Vorlagen sind schon da');
+      } catch (err) {
+        if (!err.handled) toast(errText(err));
+      }
+    },
     siteInfo: (el) => openSiteInfo(el.dataset.id),
     newMaterial: (el) => openMaterialDialog(el.dataset.project),
     delMaterial: (el) => delMaterial(el.dataset.id),
@@ -2511,6 +2793,11 @@ ${session.user.name}${session.company.name ? '\n' + session.company.name : ''}`;
       if (u && !u.dataset.touched) u.value = usernameFrom(ev.target.value);
     }
     if (ev.target.matches('[data-username]')) ev.target.dataset.touched = '1';
+    if (form && (ev.target.name === 'title' || ev.target.name === 'details') && $('[data-pack]', form)) packFromForm(form, false);
+    if (ev.target.matches('[data-pack]')) {
+      ev.target.dataset.touched = '1';
+      packFromForm(form, false);
+    }
     if (ev.target.matches('[data-offer]')) {
       const out = $('[data-live=offersum]', form);
       const area = Z.parseDecimal(form.elements.offerArea.value);
