@@ -24,10 +24,11 @@
     eintraege: '<rect x="5" y="3.5" width="14" height="17" rx="1"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>',
     bericht: '<path d="M4 20h16"/><path d="M7 17v-5M12 17V7M17 17v-8"/>',
     aufgaben: '<rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/>',
+    baustellen: '<rect x="3.5" y="4" width="13" height="5" rx="1"/><path d="M16.5 6.5h3v5.5H10.5v3"/><rect x="9" y="15" width="3" height="5.5" rx="1"/>',
     team: '<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M16.5 14c2.2 0 3.7 1.4 4.1 4"/>',
     einstellungen: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   };
-  const TAB_LABELS = { heute: 'Heute', aufgaben: 'Aufgaben', eintraege: 'Einträge', bericht: 'Bericht', team: 'Team', einstellungen: 'Einstellungen' };
+  const TAB_LABELS = { heute: 'Heute', aufgaben: 'Aufgaben', baustellen: 'Baustellen', eintraege: 'Einträge', bericht: 'Bericht', team: 'Team', einstellungen: 'Einstellungen' };
 
   let session = null; // { user, company }
   let serverMe = null; // eigener Stand laut Server
@@ -57,6 +58,15 @@
     installPrompt: null,
     myTasks: null,
     adminTasks: null,
+    myMaterials: null,
+    matItems: [],
+    units: ['Stück', 'l', 'kg', 'm', 'm²', 'Rolle', 'Eimer', 'Dose', 'Kartusche', 'Packung', 'Sack'],
+    sites: null,
+    siteReport: null,
+    tasksMode: 'day',
+    plan: null,
+    planWeek: null,
+    push: null,
     tasksDay: Z.dateKey(Date.now()),
   };
 
@@ -348,7 +358,7 @@
       ? `<span class="t ${st === 'end' ? 'stamp-new' : ''}">${Z.timeOfDay(e.end)}</span>`
       : `<span class="t running">${Z.isOnBreak(e) ? 'Pause' : 'läuft'}</span>`;
     const start = `<span class="t ${st === 'start' ? 'stamp-new' : ''}">${Z.timeOfDay(e.start)}</span>`;
-    const what = `<span class="what">${p ? `<span class="pname"><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}</span>` : '<span class="pname muted">Ohne Projekt</span>'}`
+    const what = `<span class="what">${p ? `<span class="pname"><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}</span>` : '<span class="pname muted">Ohne Baustelle</span>'}`
       + (e.note ? `<small>${esc(e.note)}</small>` : '')
       + (brk ? `<small>Pause ${brk} Min.</small>` : '')
       + (e.manual ? '<small class="manual">nachgetragen</small>' : '') + '</span>';
@@ -380,8 +390,8 @@
     const dis = ui.busy ? ' disabled' : '';
 
     const select = hasProjects ? `
-      <label class="field field--project"><span>Projekt</span>
-        <select data-change="project"${dis}><option value="">Ohne Projekt</option>${projectOptions(pid)}</select>
+      <label class="field field--project"><span>Baustelle</span>
+        <select data-change="project"${dis}><option value="">Ohne Baustelle</option>${projectOptions(pid)}</select>
       </label>` : '';
 
     const buttons = !run
@@ -423,6 +433,7 @@
         <h1>${esc(longDate(k))}</h1>
         <p class="sub">KW ${Z.isoWeek(k)}${d.holiday ? ', ' + esc(d.holiday) : ''}${d.absence ? ', ' + esc(Z.absenceLabel(d.absence)) : ''}</p>
       </header>
+      ${forgottenAlert(run)}
       <section class="clock clock--${stCls}" aria-label="Stempeluhr">
         <p class="status"><i aria-hidden="true"></i><span>${esc(stText)}</span></p>
         <p class="timer num" role="timer" data-live="timer">${Z.fmtHMS(todayMs(run, k))}</p>
@@ -432,11 +443,13 @@
         ${note}
       </section>
 
+      ${siteCard(pid ? projectById(pid) : null)}
+
       ${tasksSection()}
 
       <section class="timecard" aria-labelledby="tc-h">
         <div class="timecard-head"><h2 id="tc-h">Stempelkarte</h2><span class="num">${Z.fmtDate(k)}</span></div>
-        <div class="stamp-cols" aria-hidden="true"><span>Kommen</span><span>Gehen</span><span>Projekt</span><span>Dauer</span></div>
+        <div class="stamp-cols" aria-hidden="true"><span>Kommen</span><span>Gehen</span><span>Baustelle</span><span>Dauer</span></div>
         ${list.length
           ? `<ol class="stamps">${list.map((e) => stampRow(e)).join('')}</ol>`
           : '<p class="empty">Noch nichts gestempelt. Tipp auf „Kommen“, sobald du anfängst.</p>'}
@@ -552,7 +565,7 @@
       + `<label class="field no-print"><span>Inhalt</span>
         <select data-change="reportProject">
           <option value="__all" ${pf === '__all' ? 'selected' : ''}>Arbeitszeitnachweis, alle Zeiten</option>
-          <option value="" ${pf === '' ? 'selected' : ''}>Nur Zeiten ohne Projekt</option>
+          <option value="" ${pf === '' ? 'selected' : ''}>Nur Zeiten ohne Baustelle</option>
           ${projectOptions(pf, true)}
         </select>
       </label>`;
@@ -577,7 +590,7 @@
       const p = projectById(pid);
       const pctv = totalWork ? Math.round((min / totalWork) * 100) : 0;
       return `<li>
-        <span class="pname">${p ? `<i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}${p.client ? ` <small>${esc(p.client)}</small>` : ''}` : '<span class="muted">Ohne Projekt</span>'}</span>
+        <span class="pname">${p ? `<i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}${p.client ? ` <small>${esc(p.client)}</small>` : ''}` : '<span class="muted">Ohne Baustelle</span>'}</span>
         <span class="num">${hm(min)}</span><span class="num pct">${pctv} %</span>
         <div class="bar" aria-hidden="true"><i style="width:${pctv}%;${p ? `background:${esc(p.color)}` : ''}"></i></div>
       </li>`;
@@ -622,8 +635,8 @@
         <div><dt>Zeitkonto am ${Z.fmtDate(end, false)}</dt><dd>${bal(closing)}</dd></div>
       </dl>
       ${absText ? `<p class="summary">Abwesenheiten: ${esc(absText)}</p>` : ''}
-      ${hasProjects ? `<section class="report-sec"><h2>Nach Projekt</h2><ul class="proj-bars">${projRows}</ul>
-        ${autoTotal ? `<p class="note">Automatisch abgezogene Pausen (${hm(autoTotal)}) sind in den Projektzeiten nicht abgezogen.</p>` : ''}</section>` : ''}
+      ${hasProjects ? `<section class="report-sec"><h2>Nach Baustelle</h2><ul class="proj-bars">${projRows}</ul>
+        ${autoTotal ? `<p class="note">Automatisch abgezogene Pausen (${hm(autoTotal)}) sind in den Zeiten je Baustelle nicht abgezogen.</p>` : ''}</section>` : ''}
       <section class="report-sec">
         <h2>Tage</h2>
         <div class="table-wrap"><table class="report">
@@ -641,7 +654,7 @@
 
   function reportForProject(pf, from, end, ym, stand) {
     const p = projectById(pf);
-    const label = pf === '' ? 'Zeiten ohne Projekt' : p ? p.name : 'Projekt';
+    const label = pf === '' ? 'Zeiten ohne Baustelle' : p ? p.name : 'Baustelle';
     let total = 0;
     const rows = [];
     for (const k of Z.daysBetween(from, end)) {
@@ -700,6 +713,7 @@
       <i class="presence presence--${u.status}" aria-hidden="true"></i>
       <span class="who"><b>${esc(u.name)}</b>${u.role === 'admin' ? ' <span class="role">Admin</span>' : ''}
         <small>${esc(memberStatus(u))}${p ? ', ' + esc(p.name) : ''}</small>
+        ${u.forgotten ? `<small class="neg">Ausstempeln vergessen? Läuft seit ${esc(Z.dateKey(u.runStart) !== todayKey() ? shortDate(Z.dateKey(u.runStart)) + ' ' : '')}${Z.timeOfDay(u.runStart)} Uhr</small>` : ''}
         ${u.tasksOpen + u.tasksDone ? `<small>Aufgaben heute: ${u.tasksDone} von ${u.tasksOpen + u.tasksDone} erledigt</small>` : ''}
         ${u.warnings ? `<small class="neg">${u.warnings} ${u.warnings === 1 ? 'Hinweis' : 'Hinweise'} zum Arbeitszeitgesetz</small>` : ''}</span>
       <span class="figs"><span class="num">${hm(u.todayMin)}</span><small>Konto ${bal(u.balanceMin)}</small></span>
@@ -711,6 +725,7 @@
     const active = ui.team.filter((u) => u.active);
     const inactive = ui.team.filter((u) => !u.active);
     const present = active.filter((u) => u.status !== 'off').length;
+    const forgot = active.filter((u) => u.forgotten);
     const ym = ui.teamMonth;
     const tag = `${ym.y}-${Z.pad(ym.m)}`;
     const future = Z.monthRange(ym.y, ym.m)[0] > todayKey();
@@ -719,6 +734,7 @@
         <h1>Team</h1>
         <p class="sub">${present} von ${active.length} anwesend, Stand ${Z.timeOfDay(ui.teamNow)} Uhr</p>
       </header>
+      ${forgot.length ? `<aside class="alert" role="alert"><p><b>${forgot.map((u) => esc(u.name)).join(', ')} ${forgot.length === 1 ? 'hat' : 'haben'} vermutlich vergessen, auszustempeln.</b> Tipp auf den Namen und trag unter Einträge die Gehen-Zeit ein.</p></aside>` : ''}
       <div class="actions">
         <button type="button" class="btn btn--primary" data-act="newMember">Mitarbeiter anlegen</button>
         <button type="button" class="btn" data-act="refreshTeam">Aktualisieren</button>
@@ -886,7 +902,7 @@
       ${check}
       <div class="task-body">
         <b>${esc(t.title)}</b>
-        ${p ? `<span class="pname"><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}</span>` : ''}
+        ${p ? `<button type="button" class="pname pname--link" data-act="siteInfo" data-id="${esc(p.id)}"><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}${p.address ? `<small>${esc(firstLine(p.address))}</small>` : ''}</button>` : ''}
         ${late ? `<small class="neg">offen seit ${esc(shortDate(t.day))}</small>` : ''}
         ${t.details ? `<p class="task-details">${esc(t.details)}</p>` : ''}
         ${done ? `<small class="done-text">${esc(doneText(t))}</small>` : ''}
@@ -916,8 +932,18 @@
     const rel = { [k]: 'heute', [Z.addDays(k, 1)]: 'morgen', [Z.addDays(k, -1)]: 'gestern' }[day] || '';
     const label = `${Z.WEEKDAYS_LONG[Z.weekday(day)]}, ${Z.fmtDate(day, false)}`;
     const month = `${day.slice(0, 7)}`;
+    const mode = `<div class="seg" role="group" aria-label="Ansicht">
+        <button type="button" data-act="tasksMode" data-mode="day" aria-pressed="${ui.tasksMode === 'day'}">Tag</button>
+        <button type="button" data-act="tasksMode" data-mode="week" aria-pressed="${ui.tasksMode === 'week'}">Woche</button>
+      </div>`;
+    if (ui.tasksMode === 'week') {
+      return `<header class="page-head"><h1>Aufgaben</h1></header>${mode}
+        <div class="actions"><button type="button" class="btn btn--primary" data-act="newTask">Aufgabe anlegen</button></div>
+        ${viewPlan()}`;
+    }
     const head = `
       <header class="page-head"><h1>Aufgaben</h1></header>
+      ${mode}
       <div class="day-nav">
         <button type="button" class="icon-btn" data-act="taskDay" data-dir="-1" aria-label="Vorheriger Tag">${CHEV_LEFT}</button>
         <span class="day-label">${esc(label)}${rel ? ` <small>${rel}</small>` : ''}</span>
@@ -1000,12 +1026,14 @@
     });
   }
 
-  async function openTaskDialog(id) {
+  async function openTaskDialog(id, preset) {
     const t = id ? (ui.adminTasks || []).find((x) => x.id === id) : null;
     if (id && !t) return;
     if (!ui.team) await loadTeam();
+    const pre = preset || {};
     const people = (ui.team || []).filter((u) => u.active || (t && t.assignees.includes(u.id)));
-    const all = !t || !t.assignees.length;
+    const all = t ? !t.assignees.length : !pre.userId;
+    const picked = t ? t.assignees : pre.userId ? [pre.userId] : [];
     const done = t && t.doneAt != null;
     openDialog({
       title: t ? 'Aufgabe bearbeiten' : 'Aufgabe anlegen',
@@ -1016,12 +1044,12 @@
         <label class="field"><span>Details, optional</span>
           <textarea name="details" rows="3" maxlength="1000" placeholder="Farbe, Material, Ansprechpartner vor Ort …">${esc(t ? t.details : '')}</textarea></label>
         <div class="field-row">
-          <label class="field"><span>Tag</span><input type="date" name="day" value="${esc(t ? t.day : ui.tasksDay)}"></label>
-          ${me.projects.length ? `<label class="field"><span>Projekt</span><select name="project"><option value="">Ohne Projekt</option>${projectOptions(t ? t.projectId : null)}</select></label>` : ''}
+          <label class="field"><span>Tag</span><input type="date" name="day" value="${esc(t ? t.day : pre.day || ui.tasksDay)}"></label>
+          ${me.projects.length ? `<label class="field"><span>Baustelle</span><select name="project"><option value="">Ohne Baustelle</option>${projectOptions(t ? t.projectId : null)}</select></label>` : ''}
         </div>
         <fieldset class="assign"><legend>Für wen?</legend>
           <label class="check"><input type="checkbox" name="all" data-assign-all ${all ? 'checked' : ''}><span>Alle</span></label>
-          ${people.map((u) => `<label class="check"><input type="checkbox" name="a" value="${esc(u.id)}" data-assign-one ${!all && t.assignees.includes(u.id) ? 'checked' : ''}><span>${esc(u.name)}</span></label>`).join('')}
+          ${people.map((u) => `<label class="check"><input type="checkbox" name="a" value="${esc(u.id)}" data-assign-one ${!all && picked.includes(u.id) ? 'checked' : ''}><span>${esc(u.name)}</span></label>`).join('')}
         </fieldset>
         ${t ? `<label class="check"><input type="checkbox" name="done" ${done ? 'checked' : ''}><span>Erledigt${done ? `<small>${esc(doneText(t))}</small>` : ''}</span></label>` : ''}`,
       onSubmit: async (fd) => {
@@ -1037,8 +1065,8 @@
         if (t && (fd.get('done') === 'on') !== done) {
           await call('POST', `/api/tasks/${encodeURIComponent(t.id)}/${done ? 'reopen' : 'done'}`, {});
         }
-        if (!t && body.day !== ui.tasksDay) ui.tasksDay = body.day;
-        await loadAdminTasks();
+        if (!t && body.day !== ui.tasksDay && ui.tasksMode === 'day') ui.tasksDay = body.day;
+        await (ui.tasksMode === 'week' ? loadPlan() : loadAdminTasks());
         render();
         toast(t ? 'Aufgabe gespeichert' : `Aufgabe angelegt für ${shortDate(r.task.day)}`);
         return null;
@@ -1062,7 +1090,6 @@
     const c = session.company;
     const year = +todayKey().slice(0, 4);
     const hol = [...Z.holidays(year, c.state)].sort((a, b) => (a[0] < b[0] ? -1 : 1));
-    const projects = me.projects;
     const admin = isAdmin();
     return `
       <header class="page-head"><h1>Einstellungen</h1></header>
@@ -1078,6 +1105,8 @@
         </dl>
         <p class="help">${admin ? 'Deine eigenen Einträge, Berichte, Sollzeit und Urlaub findest du unter Team bei deinem Namen.' : 'Sollzeit und Urlaub legt das Büro fest. Stimmt etwas nicht, sag dort Bescheid.'}</p>
       </section>
+
+      ${pushSection()}
 
       ${admin ? `
       <form id="company-form" class="settings settings-sec" novalidate>
@@ -1100,20 +1129,15 @@
           <label class="check"><input type="checkbox" name="autoBreak" ${c.autoBreak ? 'checked' : ''}>
             <span>Gesetzliche Mindestpause automatisch abziehen
             <small>Ist an einem Tag weniger Pause erfasst als vorgeschrieben (30 Min. ab 6 Std., 45 Min. ab 9 Std.), wird der Rest von der Arbeitszeit abgezogen.</small></span></label>
+          <div class="field-row">
+            <label class="field"><span>Erinnerung um</span><input type="time" name="reminderTime" value="${esc(c.reminderTime || '')}"></label>
+            <label class="field"><span>Stundensatz netto (€)</span><input type="text" name="hourlyRate" inputmode="decimal" value="${c.hourlyRate != null ? esc((c.hourlyRate / 100).toFixed(2).replace('.', ',')) : ''}" placeholder="z. B. 52"></label>
+          </div>
+          <p class="help">Wer zur Erinnerungszeit noch eingestempelt ist, bekommt eine Mitteilung aufs Handy. Feld leer lassen, um das abzuschalten. Mit dem Stundensatz rechnet die App die Kosten je Baustelle aus und vergleicht sie mit dem Angebot. Die Mitarbeiter sehen ihn nicht.</p>
         </fieldset>
         <p class="form-error" role="alert" hidden></p>
         <button type="submit" class="btn btn--primary btn--wide">Firma speichern</button>
       </form>
-
-      <section class="settings-sec" aria-labelledby="pj-h">
-        <h2 id="pj-h">Projekte</h2>
-        <p class="help">Projekte sind freiwillig. Gibt es welche, wählen die Mitarbeiter beim Stempeln aus, woran sie arbeiten.</p>
-        ${projects.length ? `<ul class="projects">${projects.map((p) => `<li><button type="button" class="proj-row" data-act="editProject" data-id="${esc(p.id)}">
-          <i class="dot" style="--c:${esc(p.color)}"></i>
-          <span class="pname">${esc(p.name)}${p.client ? `<small>${esc(p.client)}</small>` : ''}</span>
-          <span class="muted">${p.archived ? 'archiviert' : ''}</span></button></li>`).join('')}</ul>` : ''}
-        <div class="actions"><button type="button" class="btn" data-act="newProject">Projekt anlegen</button></div>
-      </section>
 
       <section class="settings-sec" aria-labelledby="bk-h">
         <h2 id="bk-h">Datensicherung</h2>
@@ -1317,8 +1341,8 @@
 
   function projectField(selected) {
     if (!state.projects.length) return '<input type="hidden" name="project" value="">';
-    return `<label class="field"><span>Projekt</span>
-      <select name="project"><option value="">Ohne Projekt</option>${projectOptions(selected)}</select></label>`;
+    return `<label class="field"><span>Baustelle</span>
+      <select name="project"><option value="">Ohne Baustelle</option>${projectOptions(selected)}</select></label>`;
   }
 
   function openEntryDialog(id, date) {
@@ -1439,38 +1463,535 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // Baustellen: Infos, Angebot, Auswertung, Material
+  // ------------------------------------------------------------------
+  const isApple = () => /iPhone|iPad|Macintosh/.test(navigator.userAgent);
+  function mapsUrl(address) {
+    const q = encodeURIComponent(address.replace(/\s*\n\s*/g, ', '));
+    return isApple() ? `https://maps.apple.com/?q=${q}` : `https://www.google.com/maps/search/?api=1&query=${q}`;
+  }
+  const telHref = (phone) => 'tel:' + phone.replace(/[^+0-9]/g, '');
+  const firstLine = (t) => String(t || '').split('\n')[0];
+
+  /** Kopf mit Adresse, Route, Anrufen, Zugang */
+  function siteInfoHtml(p, withMaterial) {
+    return `
+      ${p.address ? `<p class="site-addr">${esc(p.address)}</p>` : ''}
+      <div class="actions">
+        ${p.address ? `<a class="btn" href="${esc(mapsUrl(p.address))}" target="_blank" rel="noopener">Route</a>` : ''}
+        ${p.phone ? `<a class="btn" href="${esc(telHref(p.phone))}">Anrufen${p.contact ? ` <small>${esc(p.contact)}</small>` : ''}</a>` : ''}
+        ${withMaterial ? `<button type="button" class="btn" data-act="newMaterial" data-project="${esc(p.id)}">Material eintragen</button>` : ''}
+      </div>
+      ${!p.phone && p.contact ? `<p class="site-access"><b>Ansprechpartner:</b> ${esc(p.contact)}</p>` : ''}
+      ${p.access ? `<p class="site-access"><b>Zugang:</b> ${esc(p.access)}</p>` : ''}`;
+  }
+
+  /** Karte der aktuellen Baustelle auf „Heute“ */
+  function siteCard(p) {
+    if (!p) return '';
+    const mats = (ui.myMaterials || []).filter((m) => m.projectId === p.id);
+    return `<section class="site" style="--c:${esc(p.color)}" aria-label="Baustelle ${esc(p.name)}">
+      <div class="timecard-head"><h2><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}</h2>${p.client ? `<span class="muted">${esc(p.client)}</span>` : ''}</div>
+      ${siteInfoHtml(p, true)}
+      ${mats.length ? `<ul class="mat-list">${mats.map((m) => `<li>
+        <span><b class="num">${esc(Z.fmtNum(m.quantity))} ${esc(m.unit)}</b> ${esc(m.item)}${m.note ? `<small>${esc(m.note)}</small>` : ''}</span>
+        <button type="button" class="link-btn" data-act="delMaterial" data-id="${esc(m.id)}" aria-label="${esc(m.item)} löschen">Löschen</button>
+      </li>`).join('')}</ul>` : ''}
+    </section>`;
+  }
+
+  function forgottenAlert(run) {
+    if (!run) return '';
+    const overnight = Z.dateKey(run.start) < todayKey();
+    const long = now() - run.start > 12 * Z.HOUR;
+    if (!overnight && !long) return '';
+    const since = overnight ? `${Z.WEEKDAYS_LONG[Z.weekday(Z.dateKey(run.start))]} ${Z.timeOfDay(run.start)} Uhr` : `${Z.timeOfDay(run.start)} Uhr`;
+    return `<aside class="alert" role="alert">
+      <p><b>Du bist seit ${esc(since)} eingestempelt.</b> Hast du vergessen, auszustempeln?</p>
+      <p>${canEdit() ? `<button type="button" class="btn btn--primary" data-act="editEntry" data-id="${esc(run.id)}">Gehen-Zeit eintragen</button>`
+        : 'Sag im Büro Bescheid, dann wird die Zeit korrigiert.'}</p>
+    </aside>`;
+  }
+
+  function openSiteInfo(id) {
+    const p = projectById(id);
+    if (!p) return;
+    openDialog({ title: p.name, cancel: 'Schließen', body: `${p.client ? `<p class="muted">${esc(p.client)}</p>` : ''}${siteInfoHtml(p, false)}` });
+  }
+
+  // ---- Angebot und Stand
+  const LEVEL_TEXT = { ok: 'im Rahmen', warn: '80 % des Angebots verbraucht', forecast: 'wird voraussichtlich teurer', over: 'Angebot überschritten' };
+  function budgetText(st) {
+    if (!st || !st.level) return '';
+    const parts = [];
+    if (st.hours) parts.push(`${hm(st.hours.used)} von ${hm(st.hours.budget)} Std.`);
+    if (st.money) parts.push(`${Z.fmtEUR(st.money.used)} von ${Z.fmtEUR(st.money.budget)}`);
+    if (st.progress != null) parts.push(`${Math.round(st.progress * 100)} % fertig`);
+    let verdict = LEVEL_TEXT[st.level];
+    if (st.level === 'forecast') verdict = `voraussichtlich ${st.overPct} % über dem Angebot`;
+    if (st.level === 'over') {
+      const used = Math.round((Math.max(st.hours ? st.hours.ratio : 0, st.money ? st.money.ratio : 0) - 1) * 100);
+      verdict = used > 0 ? `Angebot um ${used} % überschritten` : 'Angebot ausgeschöpft';
+      if (st.overPct > used) verdict += `, hochgerechnet ${st.overPct} % drüber`;
+    }
+    return `${parts.join(', ')}. ${verdict[0].toUpperCase() + verdict.slice(1)}.`;
+  }
+  function budgetBar(st) {
+    if (!st || !st.level) return '';
+    const ratio = Math.max(st.hours ? st.hours.ratio : 0, st.money ? st.money.ratio : 0);
+    return `<div class="budget budget--${st.level}">
+      <div class="bar" aria-hidden="true"><i style="width:${Math.min(100, Math.round(ratio * 100))}%"></i></div>
+      <small>${esc(budgetText(st))}</small>
+    </div>`;
+  }
+
+  function viewSites() {
+    if (!ui.sites) return '<header class="page-head"><h1>Baustellen</h1></header><p class="empty">Lädt …</p>';
+    const fig = new Map(ui.sites.projects.map((x) => [x.id, x]));
+    const active = me.projects.filter((p) => !p.archived);
+    const archived = me.projects.filter((p) => p.archived);
+    const row = (p) => {
+      const f = fig.get(p.id) || { workedMin: 0, monthMin: 0, openTasks: 0, status: null, running: 0 };
+      return `<li><a class="site-row" href="#baustellen/${esc(p.id)}">
+        <i class="dot" style="--c:${esc(p.color)}"></i>
+        <span class="who"><b>${esc(p.name)}</b>
+          ${p.client ? `<small>${esc(p.client)}</small>` : ''}
+          ${p.address ? `<small>${esc(firstLine(p.address))}</small>` : ''}
+          ${f.running ? `<small class="on-site">${f.running} ${f.running === 1 ? 'Person' : 'Personen'} gerade da</small>` : ''}
+        </span>
+        <span class="figs"><span class="num">${hm(f.workedMin)}</span><small>${f.openTasks ? `${f.openTasks} ${f.openTasks === 1 ? 'Aufgabe' : 'Aufgaben'} offen` : 'Std. gesamt'}</small></span>
+        ${budgetBar(f.status)}
+      </a></li>`;
+    };
+    return `
+      <header class="page-head"><h1>Baustellen</h1><p class="sub">${active.length} aktiv</p></header>
+      <div class="actions"><button type="button" class="btn btn--primary" data-act="newProject">Baustelle anlegen</button></div>
+      ${ui.sites.hourlyRate == null ? `<aside class="hint"><p>Trag unter Einstellungen → Firma euren Stundensatz ein. Dann vergleicht die App auch Angebote in Euro, etwa bei m²-Preisen.</p></aside>` : ''}
+      ${active.length ? `<ul class="sites">${active.map(row).join('')}</ul>`
+        : '<p class="empty">Noch keine Baustellen. Leg die erste an, mit Adresse und Angebot, dann sehen die Mitarbeiter, wo sie hin müssen.</p>'}
+      ${archived.length ? `<details class="archived"><summary>Archiviert (${archived.length})</summary><ul class="sites">${archived.map(row).join('')}</ul></details>` : ''}`;
+  }
+
+  function viewSite(id) {
+    const p = projectById(id);
+    if (!p) return '<p class="empty">Diese Baustelle gibt es nicht mehr. <a href="#baustellen">Zurück</a></p>';
+    const r = ui.siteReport && ui.siteReport.project.id === id ? ui.siteReport : null;
+    const head = `
+      <header class="page-head">
+        <a class="back" href="#baustellen">Baustellen</a>
+        <h1>${esc(p.name)}</h1>
+        ${p.client ? `<p class="sub">${esc(p.client)}</p>` : ''}
+      </header>
+      ${siteInfoHtml(p, true)}
+      <div class="actions actions--site">
+        <button type="button" class="btn" data-act="editProject" data-id="${esc(p.id)}">Bearbeiten</button>
+        <a class="btn" href="/api/export/project.csv?id=${encodeURIComponent(p.id)}" download>Als CSV</a>
+      </div>`;
+    if (!r) return head + '<p class="empty">Lädt …</p>';
+    const st = r.status;
+    const sum = Z.offerSum(p);
+    const hasOffer = p.budgetMin || sum;
+    const progressForm = `
+      <form id="progress-form" class="progress-form" data-id="${esc(p.id)}" novalidate>
+        ${p.offerArea
+          ? `<label class="field"><span>Fertig, in m² von ${esc(Z.fmtNum(p.offerArea))}</span><input type="text" inputmode="decimal" name="doneArea" value="${p.doneArea != null ? esc(Z.fmtNum(p.doneArea)) : ''}" placeholder="z. B. 80"></label>`
+          : `<label class="field"><span>Fertig, in Prozent</span><input type="number" min="0" max="100" step="5" inputmode="numeric" name="progressPct" value="${p.progressPct != null ? p.progressPct : ''}" placeholder="z. B. 60"></label>`}
+        <button type="submit" class="btn">Fortschritt speichern</button>
+        <p class="form-error" role="alert" hidden></p>
+      </form>`;
+    const offer = !hasOffer
+      ? `<p class="help">Noch kein Angebot hinterlegt. Unter „Bearbeiten“ trägst du die Stunden, m² × Preis oder die Angebotssumme ein. Dann warnt die App, wenn es teurer wird.</p>`
+      : `<dl class="totals">
+          <div><dt>Gearbeitet</dt><dd class="num">${hm(r.workedMin)}</dd></div>
+          ${p.budgetMin ? `<div><dt>Angebot</dt><dd class="num">${hm(p.budgetMin)} Std.</dd></div>` : ''}
+          ${sum ? `<div><dt>Angebot netto</dt><dd class="num">${Z.fmtEUR(sum)}</dd></div>` : ''}
+          ${st.cost != null ? `<div><dt>Kosten bisher</dt><dd class="num">${Z.fmtEUR(st.cost)}</dd></div>` : ''}
+          ${st.progress != null ? `<div><dt>Fertig</dt><dd class="num">${Math.round(st.progress * 100)} %</dd></div>` : ''}
+        </dl>
+        ${sum && st.cost == null ? '<p class="help">Für den Vergleich in Euro fehlt noch der Stundensatz unter Einstellungen → Firma.</p>' : ''}
+        ${budgetBar(st)}
+        ${st.level === 'forecast' || st.level === 'over' ? `<p><button type="button" class="btn btn--primary" data-act="customerInfo" data-id="${esc(p.id)}">Kunden informieren</button></p>` : ''}`;
+    const mats = r.materialSums.length ? `<ul class="mat-list">${r.materialSums.map((m) => `<li>
+        <span><b class="num">${esc(Z.fmtNum(m.quantity))} ${esc(m.unit)}</b> ${esc(m.item)}</span>
+        <span class="num">${m.cost ? Z.fmtEUR(m.cost) + (m.priced ? '' : ' +') : ''}</span></li>`).join('')}</ul>
+      <details><summary>Einzelne Einträge (${r.materials.length})</summary><ul class="mat-list">${r.materials.map((m) => `<li>
+        <span>${esc(shortDate(m.day))}, ${esc(m.userName)}: <b class="num">${esc(Z.fmtNum(m.quantity))} ${esc(m.unit)}</b> ${esc(m.item)}${m.note ? `<small>${esc(m.note)}</small>` : ''}</span>
+        <button type="button" class="link-btn" data-act="delMaterial" data-id="${esc(m.id)}">Löschen</button></li>`).join('')}</ul></details>`
+      : '<p class="empty">Noch kein Material eingetragen.</p>';
+    return head + `
+      <section class="report-sec"><h2>Angebot und Stand</h2>${offer}${hasOffer ? progressForm : ''}</section>
+      <section class="report-sec"><h2>Stunden nach Mitarbeiter</h2>
+        ${r.perUser.length ? `<ul class="mat-list">${r.perUser.map((u) => `<li><span>${esc(u.name)}</span><span class="num">${hm(u.min)}</span></li>`).join('')}</ul>` : '<p class="empty">Noch keine Zeiten auf dieser Baustelle.</p>'}
+      </section>
+      <section class="report-sec"><h2>Material</h2>${mats}</section>
+      <section class="report-sec"><h2>Aufgaben</h2>
+        ${r.tasks.list.length ? `<p class="help">${r.tasks.open} offen, ${r.tasks.done} erledigt</p><ul class="mat-list">${r.tasks.list.map((t) => `<li>
+          <span>${t.doneAt != null ? '✓ ' : ''}${esc(t.title)}<small>${esc(shortDate(t.day))}${t.doneAt != null ? `, ${esc(doneText(t))}` : ''}</small></span></li>`).join('')}</ul>`
+          : '<p class="empty">Keine Aufgaben für diese Baustelle.</p>'}
+      </section>
+      <section class="report-sec"><h2>Letzte Zeiten</h2>
+        ${r.entries.length ? `<ul class="mat-list">${r.entries.slice(0, 30).map((e) => `<li>
+          <span>${esc(shortDate(Z.dateKey(e.start)))}, ${esc(e.userName)}<small>${Z.timeOfDay(e.start)}–${e.end != null ? Z.timeOfDay(e.end) : 'läuft'}${e.note ? ', ' + esc(e.note) : ''}</small></span>
+          <span class="num">${hm(e.min)}</span></li>`).join('')}</ul>` : '<p class="empty">Noch keine Zeiten.</p>'}
+      </section>`;
+  }
+
+  async function loadSites() {
+    if (!isAdmin()) return;
+    try {
+      ui.sites = await call('GET', '/api/projects/summary');
+    } catch (err) {
+      if (!err.handled) toast(errText(err));
+    }
+  }
+  async function loadSiteReport(id) {
+    try {
+      ui.siteReport = await call('GET', `/api/projects/${encodeURIComponent(id)}/report`);
+      setProjects(me.projects.map((p) => (p.id === id ? ui.siteReport.project : p)));
+    } catch (err) {
+      if (!err.handled) toast(errText(err));
+    }
+  }
+
   function openProjectDialog(id) {
     const p = id ? projectById(id) : null;
     if (id && !p) return;
     const color = p ? p.color : Z.COLORS[me.projects.length % Z.COLORS.length];
+    const v = (x) => (x == null ? '' : x);
     openDialog({
-      title: p ? 'Projekt bearbeiten' : 'Projekt anlegen',
+      title: p ? 'Baustelle bearbeiten' : 'Baustelle anlegen',
       submit: p ? 'Speichern' : 'Anlegen',
       body: `
-        <label class="field"><span>Name</span><input type="text" name="name" maxlength="80" value="${esc(p ? p.name : '')}" placeholder="z. B. Baustelle Hauptstraße"></label>
+        <label class="field"><span>Name</span><input type="text" name="name" maxlength="80" value="${esc(p ? p.name : '')}" placeholder="z. B. Wohnung Huber"></label>
         <label class="field"><span>Kunde, optional</span><input type="text" name="client" maxlength="80" value="${esc(p ? p.client : '')}"></label>
+        <label class="field"><span>Adresse</span><textarea name="address" rows="2" maxlength="300" placeholder="Straße, PLZ Ort">${esc(p ? p.address : '')}</textarea></label>
+        <div class="field-row">
+          <label class="field"><span>Ansprechpartner</span><input type="text" name="contact" maxlength="80" value="${esc(p ? p.contact : '')}"></label>
+          <label class="field"><span>Telefon</span><input type="tel" name="phone" maxlength="40" value="${esc(p ? p.phone : '')}"></label>
+        </div>
+        <label class="field"><span>Zugang und Hinweise</span><textarea name="access" rows="2" maxlength="500" placeholder="Schlüssel, Parken, Klingel …">${esc(p ? p.access : '')}</textarea></label>
+        <fieldset class="offer"><legend>Angebot, optional</legend>
+          <p class="help">Trag ein, was im Angebot steht: Stunden, Fläche mal Preis oder nur die Summe. Die Mitarbeiter sehen diese Zahlen nicht.</p>
+          <label class="field field--short"><span>Stunden laut Angebot</span><input type="text" name="budget" inputmode="decimal" value="${p && p.budgetMin ? hm(p.budgetMin) : ''}" placeholder="z. B. 24 oder 23:30"></label>
+          <div class="field-row">
+            <label class="field"><span>Fläche in m²</span><input type="text" name="offerArea" inputmode="decimal" value="${p && p.offerArea ? esc(Z.fmtNum(p.offerArea)) : ''}" data-offer></label>
+            <label class="field"><span>Preis je m² (€)</span><input type="text" name="offerUnitPrice" inputmode="decimal" value="${p && p.offerUnitPrice != null ? esc((p.offerUnitPrice / 100).toFixed(2).replace('.', ',')) : ''}" data-offer></label>
+          </div>
+          <label class="field field--short"><span>oder Angebotssumme netto (€)</span><input type="text" name="offerSum" inputmode="decimal" value="${p && p.offerSum != null ? esc((p.offerSum / 100).toFixed(2).replace('.', ',')) : ''}" data-offer></label>
+          <p class="help" data-live="offersum">${p && Z.offerSum(p) ? 'Angebot: ' + Z.fmtEUR(Z.offerSum(p)) : ''}</p>
+        </fieldset>
         <fieldset class="swatches"><legend>Farbe</legend>
           ${Z.COLORS.map((c, i) => `<label class="swatch" style="--c:${c}"><input type="radio" name="color" value="${c}" ${c === color ? 'checked' : ''}><span class="sr-only">${COLOR_NAMES[i]}</span></label>`).join('')}
         </fieldset>
-        ${p ? `<label class="check"><input type="checkbox" name="archived" ${p.archived ? 'checked' : ''}><span>Archiviert<small>Archivierte Projekte stehen beim Stempeln nicht mehr zur Auswahl. Ihre Zeiten bleiben erhalten.</small></span></label>` : ''}`,
+        ${p ? `<label class="check"><input type="checkbox" name="archived" ${p.archived ? 'checked' : ''}><span>Archiviert<small>Archivierte Baustellen stehen beim Stempeln nicht mehr zur Auswahl. Zeiten und Material bleiben erhalten.</small></span></label>` : ''}`,
       onSubmit: async (fd) => {
         const name = String(fd.get('name') || '').trim();
-        if (!name) return 'Bitte gib dem Projekt einen Namen.';
-        const body = { name, client: String(fd.get('client') || '').trim(), color: fd.get('color') || color, archived: fd.get('archived') === 'on' };
+        if (!name) return 'Bitte gib der Baustelle einen Namen.';
+        const num = (k, parse, label) => {
+          const raw = String(fd.get(k) || '').trim();
+          if (!raw) return { value: null };
+          const value = parse(raw);
+          return value == null ? { error: `${label} verstehe ich nicht: „${raw}“.` } : { value };
+        };
+        const budget = num('budget', Z.parseDuration, 'Die Stunden');
+        const area = num('offerArea', Z.parseDecimal, 'Die Fläche');
+        const price = num('offerUnitPrice', Z.parseMoney, 'Den Preis je m²');
+        const total = num('offerSum', Z.parseMoney, 'Die Angebotssumme');
+        const err = [budget, area, price, total].find((x) => x.error);
+        if (err) return err.error;
+        if ((area.value != null) !== (price.value != null) && total.value == null) return 'Für den m²-Preis brauche ich Fläche und Preis je m², oder trag die Angebotssumme ein.';
+        const body = {
+          name, client: String(fd.get('client') || '').trim(), address: String(fd.get('address') || ''),
+          contact: String(fd.get('contact') || '').trim(), phone: String(fd.get('phone') || '').trim(),
+          access: String(fd.get('access') || ''), color: fd.get('color') || color, archived: fd.get('archived') === 'on',
+          budgetMin: budget.value, offerArea: area.value, offerUnitPrice: price.value,
+        };
+        if (!(area.value != null && price.value != null)) body.offerSum = total.value;
         const r = p ? await call('PUT', '/api/projects/' + p.id, body) : await call('POST', '/api/projects', body);
         setProjects(r.projects);
+        await loadSites();
+        if (ui.subjectSite) await loadSiteReport(ui.subjectSite);
         render();
-        toast(p ? 'Projekt gespeichert' : `Projekt „${name}“ angelegt`);
+        toast(p ? 'Baustelle gespeichert' : `Baustelle „${name}“ angelegt`);
+        if (!p && r.project) location.hash = '#baustellen/' + r.project.id;
         return null;
       },
       del: p ? async () => {
         const r = await call('DELETE', '/api/projects/' + p.id);
         setProjects(r.projects);
-        render();
-        toast('Projekt gelöscht');
+        location.hash = '#baustellen';
+        toast('Baustelle gelöscht');
         return null;
       } : null,
     });
+  }
+
+  function openCustomerInfo(id) {
+    const r = ui.siteReport;
+    if (!r || r.project.id !== id) return;
+    const p = r.project;
+    const st = r.status;
+    let extra;
+    if (st.money && st.money.budget) {
+      const exp = Math.max(st.money.forecast || 0, st.money.used);
+      extra = `Nach aktuellem Stand rechnen wir mit Mehrkosten von etwa ${Z.fmtEUR(Math.round((exp - st.money.budget) / 1000) * 1000)} netto, das sind rund ${Math.round((exp / st.money.budget - 1) * 100)} % mehr als angeboten.`;
+    } else if (st.hours) {
+      const exp = Math.max(st.hours.forecast || 0, st.hours.used);
+      extra = `Nach aktuellem Stand brauchen wir etwa ${Math.max(1, Math.round((exp - st.hours.budget) / 60))} Stunden mehr als angeboten, das sind rund ${Math.round((exp / st.hours.budget - 1) * 100)} % mehr.`;
+    } else extra = '';
+    const msg = `Guten Tag${p.contact ? ' ' + p.contact : p.client ? ' ' + p.client : ''},
+
+bei den Arbeiten „${p.name}“ zeichnet sich ab, dass der Aufwand höher ausfällt als im Angebot vorgesehen. ${extra}
+Grund: [bitte ergänzen]
+
+Gern besprechen wir das mit Ihnen und schicken Ihnen ein Nachtragsangebot.
+
+Mit freundlichen Grüßen
+${session.user.name}${session.company.name ? '\n' + session.company.name : ''}`;
+    const dlg = openDialog({
+      title: 'Kunden informieren',
+      cancel: 'Fertig',
+      body: `
+        <p class="help">Ergänze den Grund und schick den Text an den Kunden. Wird ein Kostenanschlag wesentlich überschritten, musst du das dem Kunden unverzüglich mitteilen (§ 649 BGB). Früh Bescheid geben erspart Streit bei der Schlussrechnung.</p>
+        <label class="field"><span>Nachricht</span><textarea rows="12" data-msg>${esc(msg)}</textarea></label>
+        <div class="actions">
+          ${navigator.share ? '<button type="button" class="btn btn--primary" data-share>Teilen</button>' : ''}
+          <button type="button" class="btn" data-wa>Per WhatsApp</button>
+          <button type="button" class="btn" data-mail>Per E-Mail</button>
+          <button type="button" class="btn" data-copy>Kopieren</button>
+        </div>`,
+    });
+    const text = () => $('[data-msg]', dlg).value;
+    const sh = $('[data-share]', dlg);
+    if (sh) sh.addEventListener('click', () => navigator.share({ text: text() }).catch(() => {}));
+    $('[data-wa]', dlg).addEventListener('click', () => window.open('https://wa.me/?text=' + encodeURIComponent(text()), '_blank', 'noopener'));
+    $('[data-mail]', dlg).addEventListener('click', () => {
+      location.href = `mailto:?subject=${encodeURIComponent('Ihr Auftrag: ' + p.name)}&body=${encodeURIComponent(text())}`;
+    });
+    $('[data-copy]', dlg).addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(text());
+        toast('Text kopiert');
+      } catch (_) {
+        $('[data-msg]', dlg).select();
+        toast('Text markiert. Jetzt kopieren.');
+      }
+    });
+  }
+
+  // ---- Material
+  async function loadMyMaterials() {
+    if (!session) return;
+    const k = todayKey();
+    try {
+      const r = await call('GET', `/api/materials?from=${k}&to=${k}&mine=1`);
+      ui.myMaterials = r.materials;
+      ui.matItems = r.items;
+      if (r.units) ui.units = r.units;
+    } catch (_) { /* offline: alter Stand bleibt */ }
+  }
+
+  const MATERIAL_HINTS = ['Wandfarbe', 'Tiefengrund', 'Spachtelmasse', 'Abdeckfolie', 'Abdeckband', 'Malervlies', 'Raufaser', 'Acryl', 'Lack', 'Fassadenfarbe', 'Grundierung', 'Kleister'];
+
+  function openMaterialDialog(projectId) {
+    const active = me.projects.filter((p) => !p.archived);
+    if (!active.length) {
+      toast('Es gibt noch keine Baustelle. Das Büro legt sie an.');
+      return;
+    }
+    const items = [...new Set(ui.matItems.map((x) => x.item).concat(MATERIAL_HINTS))];
+    const dlg = openDialog({
+      title: 'Material eintragen',
+      submit: 'Eintragen',
+      body: `
+        <label class="field"><span>Baustelle</span><select name="project">${active.map((p) => `<option value="${esc(p.id)}" ${p.id === projectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Material</span><input type="text" name="item" maxlength="80" list="mat-items" autocomplete="off" placeholder="z. B. Wandfarbe weiß">
+          <datalist id="mat-items">${items.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></label>
+        <div class="field-row">
+          <label class="field"><span>Menge</span><input type="text" name="quantity" inputmode="decimal" placeholder="z. B. 2"></label>
+          <label class="field"><span>Einheit</span><select name="unit">${ui.units.map((u) => `<option ${u === 'Eimer' ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Preis je Einheit (€), wenn bekannt</span><input type="text" name="price" inputmode="decimal"></label>
+          <label class="field"><span>Datum</span><input type="date" name="day" value="${todayKey()}"></label>
+        </div>
+        <label class="field"><span>Notiz, optional</span><input type="text" name="note" maxlength="200"></label>`,
+      onSubmit: async (fd) => {
+        const item = String(fd.get('item') || '').trim();
+        if (!item) return 'Bitte schreib, welches Material.';
+        const quantity = Z.parseDecimal(fd.get('quantity'));
+        if (!(quantity > 0)) return 'Bitte gib die Menge als Zahl ein, zum Beispiel 2 oder 1,5.';
+        const pr = String(fd.get('price') || '').trim();
+        const price = pr ? Z.parseMoney(pr) : null;
+        if (pr && price == null) return 'Den Preis bitte als Zahl eingeben, zum Beispiel 65 oder 12,90.';
+        const r = await call('POST', '/api/materials', {
+          projectId: fd.get('project'), item, quantity, unit: fd.get('unit'), price, day: fd.get('day'), note: fd.get('note'),
+        });
+        await loadMyMaterials();
+        if (ui.subjectSite) await loadSiteReport(ui.subjectSite);
+        render();
+        toast(`Eingetragen: ${Z.fmtNum(quantity)} ${fd.get('unit')} ${item}`, () => delMaterial(r.material.id));
+        return null;
+      },
+    });
+    // Einheit und Preis aus früheren Einträgen übernehmen
+    $('[name=item]', dlg).addEventListener('change', (ev) => {
+      const hit = ui.matItems.find((x) => x.item.toLowerCase() === ev.target.value.trim().toLowerCase());
+      if (!hit) return;
+      if (hit.unit && ui.units.includes(hit.unit)) $('[name=unit]', dlg).value = hit.unit;
+      if (hit.price != null && !$('[name=price]', dlg).value) $('[name=price]', dlg).value = (hit.price / 100).toFixed(2).replace('.', ',');
+    });
+  }
+
+  async function delMaterial(id) {
+    await act(async () => {
+      const r = await call('DELETE', `/api/materials/${encodeURIComponent(id)}`);
+      await loadMyMaterials();
+      if (ui.subjectSite) await loadSiteReport(ui.subjectSite);
+      return r;
+    }, 'Material gelöscht');
+  }
+
+  // ---- Wochenplan
+  async function loadPlan() {
+    const from = ui.planWeek;
+    try {
+      ui.plan = await call('GET', `/api/plan?from=${from}&to=${Z.addDays(from, 6)}`);
+      ui.plan.from = from;
+    } catch (err) {
+      if (!err.handled) toast(errText(err));
+    }
+  }
+
+  function viewPlan() {
+    const from = ui.planWeek;
+    const to = Z.addDays(from, 6);
+    const nav = `<div class="day-nav">
+        <button type="button" class="icon-btn" data-act="planWeek" data-dir="-7" aria-label="Vorherige Woche">${CHEV_LEFT}</button>
+        <span class="day-label">KW ${Z.isoWeek(from)}<small>${Z.fmtDate(from, false)} bis ${Z.fmtDate(to, false)}</small></span>
+        <button type="button" class="icon-btn" data-act="planWeek" data-dir="7" aria-label="Nächste Woche">${CHEV_RIGHT}</button>
+      </div>`;
+    const plan = ui.plan && ui.plan.from === from ? ui.plan : null;
+    if (!plan) return nav + '<p class="empty">Lädt …</p>';
+    const k = todayKey();
+    const days = Z.daysBetween(from, to).filter((d) => Z.weekday(d) !== 0 || plan.tasks.some((t) => t.day === d));
+    const absOn = (uid, d) => plan.absences.find((a) => a.userId === uid && a.from <= d && d <= a.to);
+    const chip = (t) => {
+      const p = taskProject(t);
+      return `<span class="chip${t.doneAt != null ? ' chip--done' : ''}">${p ? `<i class="dot" style="--c:${esc(p.color)}"></i>` : ''}${esc(p ? p.name : t.title)}</span>`;
+    };
+    const chipsFor = (list) => {
+      const byKey = new Map();
+      for (const t of list) {
+        const key = t.projectId || 't:' + t.title;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(t);
+      }
+      return [...byKey.values()].map((g) => chip(g[0]) + (g.length > 1 ? `<small class="muted">×${g.length}</small>` : '')).join('');
+    };
+    return nav + days.map((d) => {
+      const tasks = plan.tasks.filter((t) => t.day === d);
+      const forAll = tasks.filter((t) => !t.assignees.length);
+      const holiday = Z.holidayOn(d, session.company.state);
+      return `<section class="plan-day${d === k ? ' plan-day--today' : ''}">
+        <h2><button type="button" class="link-btn" data-act="taskDay" data-day="${d}" data-mode="day">${esc(Z.WEEKDAYS_LONG[Z.weekday(d)])}, ${Z.fmtDate(d, false)}</button>
+          ${holiday ? `<span class="badge badge--holiday">${esc(holiday)}</span>` : ''}</h2>
+        ${forAll.length ? `<p class="plan-all">Für alle: ${chipsFor(forAll)}</p>` : ''}
+        <ul class="plan-list">${plan.users.map((u) => {
+          const a = absOn(u.id, d);
+          const own = tasks.filter((t) => t.assignees.includes(u.id));
+          return `<li><button type="button" class="plan-row" data-act="planAdd" data-day="${d}" data-user="${esc(u.id)}">
+            <b>${esc(u.name)}</b>
+            <span>${a ? `<span class="badge badge--absence">${esc(Z.absenceLabel(a))}</span>` : ''}${own.length ? chipsFor(own) : a ? '' : '<span class="muted">nichts geplant</span>'}</span>
+          </button></li>`;
+        }).join('')}</ul>
+      </section>`;
+    }).join('') + '<p class="help">Tipp auf eine Person, um ihr für diesen Tag eine Aufgabe zu geben. Tipp auf den Tag, um alle Aufgaben zu sehen.</p>';
+  }
+
+  // ---- Mitteilungen (Erinnerungen)
+  function urlB64ToBytes(b64) {
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
+  }
+  async function refreshPushState() {
+    const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    let subscribed = false;
+    if (supported) {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        subscribed = !!(reg && (await reg.pushManager.getSubscription()));
+      } catch (_) { /* egal */ }
+    }
+    ui.push = { supported, subscribed, permission: supported ? Notification.permission : 'unsupported' };
+  }
+  async function enablePush() {
+    const ios = /iPhone|iPad/.test(navigator.userAgent);
+    if (!ui.push || !ui.push.supported) {
+      toast(ios && !isStandalone() ? 'Auf dem iPhone gehen Erinnerungen nur, wenn die App auf dem Home-Bildschirm liegt. Leg sie dort ab und öffne sie über das Symbol.' : 'Dieser Browser unterstützt keine Mitteilungen.');
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') {
+      toast('Mitteilungen sind blockiert. Erlaube sie in den Einstellungen des Handys für die Zeiterfassung.');
+      await refreshPushState();
+      render();
+      return;
+    }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const { key } = await call('GET', '/api/push/key');
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToBytes(key) });
+      const j = sub.toJSON();
+      await call('POST', '/api/push/subscribe', { endpoint: j.endpoint, keys: j.keys });
+      toast('Erinnerungen sind an');
+    } catch (err) {
+      if (!err.handled) toast(errText(err));
+    }
+    await refreshPushState();
+    render();
+  }
+  async function disablePush() {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && (await reg.pushManager.getSubscription());
+      if (sub) {
+        await call('POST', '/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+        await sub.unsubscribe();
+      }
+      toast('Erinnerungen sind aus');
+    } catch (err) {
+      if (!err.handled) toast(errText(err));
+    }
+    await refreshPushState();
+    render();
+  }
+  function pushSection() {
+    const c = session.company;
+    const ps = ui.push;
+    const ios = /iPhone|iPad/.test(navigator.userAgent);
+    let state;
+    if (!ps) state = '<p class="empty">Lädt …</p>';
+    else if (!ps.supported) {
+      state = ios && !isStandalone()
+        ? '<p>Auf dem iPhone gehen Erinnerungen nur aus der App auf dem Home-Bildschirm. Leg die Zeiterfassung dort ab (siehe unten) und öffne sie über das Symbol.</p>'
+        : '<p>Dieser Browser kann keine Mitteilungen anzeigen.</p>';
+    } else if (ps.subscribed) {
+      state = `<p><b>Erinnerungen sind auf diesem Gerät an.</b></p>
+        <div class="actions"><button type="button" class="btn" data-act="pushTest">Test-Mitteilung schicken</button>
+        <button type="button" class="btn btn--quiet" data-act="pushOff">Ausschalten</button></div>`;
+    } else if (ps.permission === 'denied') {
+      state = '<p>Mitteilungen sind für diese App blockiert. Erlaube sie in den Einstellungen des Handys unter Mitteilungen.</p>';
+    } else state = '<div class="actions"><button type="button" class="btn btn--primary" data-act="pushOn">Erinnerungen einschalten</button></div>';
+    return `<section class="settings-sec" aria-labelledby="pu-h">
+      <h2 id="pu-h">Erinnerungen</h2>
+      <p class="help">${c.reminderTime ? `Bist du um ${esc(c.reminderTime)} Uhr noch eingestempelt, bekommst du eine Mitteilung aufs Handy.` : 'Die Erinnerung ans Ausstempeln ist im Büro ausgeschaltet.'}
+        ${isAdmin() ? ' Als Büro bekommst du außerdem Warnungen, wenn eine Baustelle teurer wird als angeboten.' : ''}</p>
+      ${state}
+    </section>`;
   }
 
   function openMemberDialog() {
@@ -1586,14 +2107,36 @@
       return null;
     },
     'company-form': async (fd) => {
+      const rateRaw = String(fd.get('hourlyRate') || '').trim();
+      const hourlyRate = rateRaw ? Z.parseMoney(rateRaw) : null;
+      if (rateRaw && hourlyRate == null) return 'Den Stundensatz bitte als Zahl eingeben, zum Beispiel 52 oder 49,50.';
       const r = await call('PUT', '/api/company', {
         name: fd.get('name'), state: fd.get('state'),
         autoBreak: fd.get('autoBreak') === 'on', employeesCanEdit: fd.get('employeesCanEdit') === 'on',
+        reminderTime: String(fd.get('reminderTime') || ''), hourlyRate,
       });
       session.company = r.company;
       setMe((await call('GET', '/api/state')).state);
       render();
       toast('Firma gespeichert');
+      return null;
+    },
+    'progress-form': async (fd, form) => {
+      const id = form.dataset.id;
+      const body = {};
+      if (fd.has('doneArea')) {
+        const raw = String(fd.get('doneArea') || '').trim();
+        body.doneArea = raw ? Z.parseDecimal(raw) : null;
+        if (raw && body.doneArea == null) return 'Bitte die fertige Fläche als Zahl eingeben, zum Beispiel 80 oder 42,5.';
+      } else {
+        const raw = String(fd.get('progressPct') || '').trim();
+        body.progressPct = raw ? Number(raw) : null;
+        if (raw && !(body.progressPct >= 0 && body.progressPct <= 100)) return 'Bitte einen Wert zwischen 0 und 100 eingeben.';
+      }
+      await call('PUT', `/api/projects/${encodeURIComponent(id)}/progress`, body);
+      await Promise.all([loadSiteReport(id), loadSites()]);
+      render();
+      toast('Fortschritt gespeichert');
       return null;
     },
     'member-form': async (fd) => {
@@ -1681,7 +2224,7 @@
 
   function renderNav() {
     // Büro: eigene Einträge und Berichte unter Team beim eigenen Namen
-    const tabs = isAdmin() ? ['heute', 'aufgaben', 'team', 'einstellungen'] : ['heute', 'eintraege', 'bericht', 'einstellungen'];
+    const tabs = isAdmin() ? ['heute', 'aufgaben', 'baustellen', 'team', 'einstellungen'] : ['heute', 'eintraege', 'bericht', 'einstellungen'];
     $('.tabs-inner').style.gridTemplateColumns = `repeat(${tabs.length}, 1fr)`;
     $('.tabs-inner').innerHTML = tabs.map((t) => `<a href="#${t}" data-view="${t}">
       <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg><span>${TAB_LABELS[t]}</span></a>`).join('');
@@ -1701,6 +2244,7 @@
     let html;
     if (ui.view === 'team') html = ui.subjectId ? viewMember() : viewTeam();
     else if (ui.view === 'aufgaben') html = viewTasks();
+    else if (ui.view === 'baustellen') html = ui.subjectSite ? viewSite(ui.subjectSite) : viewSites();
     else if (ui.view === 'eintraege') html = viewEntries(false);
     else if (ui.view === 'bericht') html = viewReport(false);
     else if (ui.view === 'einstellungen') html = viewSettings();
@@ -1751,8 +2295,9 @@
     if (!session) return;
     const parts = location.hash.slice(1).split('/');
     let v = parts[0] || 'heute';
-    if (!TAB_LABELS[v] || ((v === 'team' || v === 'aufgaben') && !isAdmin())) v = 'heute';
+    if (!TAB_LABELS[v] || (['team', 'aufgaben', 'baustellen'].includes(v) && !isAdmin())) v = 'heute';
     ui.view = v;
+    ui.subjectSite = v === 'baustellen' && parts[1] ? decodeURIComponent(parts[1]) : null;
     ui.subjectId = v === 'team' && parts[1] ? decodeURIComponent(parts[1]) : null;
     ui.sub = ui.subjectId ? (['eintraege', 'bericht', 'vertrag', 'protokoll'].includes(parts[2]) ? parts[2] : 'eintraege') : null;
     if (ui.subjectId && ui.otherId !== ui.subjectId) other = null;
@@ -1765,11 +2310,20 @@
       render();
     }
     if (v === 'aufgaben') {
-      await Promise.all([loadTeam(), loadAdminTasks()]);
+      if (!ui.planWeek) ui.planWeek = Z.startOfWeek(todayKey());
+      await Promise.all([loadTeam(), ui.tasksMode === 'week' ? loadPlan() : loadAdminTasks()]);
+      render();
+    }
+    if (v === 'baustellen') {
+      await Promise.all([loadSites(), ui.subjectSite ? loadSiteReport(ui.subjectSite) : null]);
       render();
     }
     if (v === 'heute') {
-      await loadMyTasks();
+      await Promise.all([loadMyTasks(), loadMyMaterials()]);
+      render();
+    }
+    if (v === 'einstellungen' && !ui.push) {
+      await refreshPushState();
       render();
     }
   }
@@ -1795,12 +2349,47 @@
     newProject: () => openProjectDialog(null),
     editProject: (el) => openProjectDialog(el.dataset.id),
     newMember: () => openMemberDialog(),
-    newTask: () => openTaskDialog(null),
+    newTask: () => openTaskDialog(null, ui.tasksMode === 'week' ? { day: ui.planWeek } : null),
+    tasksMode: async (el) => {
+      ui.tasksMode = el.dataset.mode;
+      if (ui.tasksMode === 'week') {
+        if (!ui.planWeek) ui.planWeek = Z.startOfWeek(ui.tasksDay || todayKey());
+        render();
+        await loadPlan();
+      } else {
+        ui.adminTasks = null;
+        render();
+        await loadAdminTasks();
+      }
+      render();
+    },
+    planWeek: async (el) => {
+      ui.planWeek = Z.addDays(ui.planWeek, Number(el.dataset.dir));
+      render();
+      await loadPlan();
+      render();
+    },
+    planAdd: (el) => openTaskDialog(null, { day: el.dataset.day, userId: el.dataset.user }),
+    siteInfo: (el) => openSiteInfo(el.dataset.id),
+    newMaterial: (el) => openMaterialDialog(el.dataset.project),
+    delMaterial: (el) => delMaterial(el.dataset.id),
+    customerInfo: (el) => openCustomerInfo(el.dataset.id),
+    pushOn: () => enablePush(),
+    pushOff: () => disablePush(),
+    pushTest: async () => {
+      try {
+        const r = await call('POST', '/api/push/test', {});
+        toast(r.sent ? 'Test-Mitteilung ist unterwegs' : 'Keine Mitteilung zugestellt. Schalt die Erinnerungen aus und wieder ein.');
+      } catch (err) {
+        if (!err.handled) toast(errText(err));
+      }
+    },
     editTask: (el) => openTaskDialog(el.dataset.id),
     doneTask: (el) => openDoneDialog(el.dataset.id),
     reopenTask: (el) => reopenTask(el.dataset.id),
     taskDay: async (el) => {
       ui.tasksDay = el.dataset.day || Z.addDays(ui.tasksDay, Number(el.dataset.dir));
+      if (el.dataset.mode) ui.tasksMode = el.dataset.mode;
       ui.adminTasks = null;
       render();
       await loadAdminTasks();
@@ -1922,6 +2511,15 @@
       if (u && !u.dataset.touched) u.value = usernameFrom(ev.target.value);
     }
     if (ev.target.matches('[data-username]')) ev.target.dataset.touched = '1';
+    if (ev.target.matches('[data-offer]')) {
+      const out = $('[data-live=offersum]', form);
+      const area = Z.parseDecimal(form.elements.offerArea.value);
+      const price = Z.parseMoney(form.elements.offerUnitPrice.value);
+      const total = Z.parseMoney(form.elements.offerSum.value);
+      const sum = area != null && price != null ? Math.round(area * price) : total;
+      if (out) out.textContent = sum ? `Angebot: ${Z.fmtEUR(sum)}${area != null && price != null ? ` (${Z.fmtNum(area)} m² × ${Z.fmtEUR(price)})` : ''}` : '';
+      form.elements.offerSum.disabled = area != null && price != null;
+    }
   });
   $('#dlg').addEventListener('click', (ev) => {
     if (ev.target === ev.currentTarget) ev.currentTarget.close(); // Klick auf den Hintergrund

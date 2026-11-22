@@ -254,3 +254,42 @@ test('Stempeln: Pause, Projektwechsel in der Pause, Fehlerfälle', () => {
   assert.deepEqual(d.perProject, { a: 4 * 60 + 150, b: 90 });
   assert.equal(ZE.timeOfDay(ZE.presenceStart(s.entries, s.entries[1])), '12:30');
 });
+
+test('Zahlen und Geld im deutschen Format', () => {
+  assert.equal(ZE.parseDecimal('120'), 120);
+  assert.equal(ZE.parseDecimal('120,5 m²'), 120.5);
+  assert.equal(ZE.parseDecimal('1.080'), 1080);
+  assert.equal(ZE.parseDecimal('1.5'), 1.5);
+  assert.equal(ZE.parseDecimal('1.080,50'), 1080.5);
+  assert.equal(ZE.parseDecimal('abc'), null);
+  assert.equal(ZE.parseMoney('9,50 €'), 950);
+  assert.equal(ZE.parseMoney(''), null);
+  assert.equal(ZE.fmtEUR(108000), '1.080 €');
+  assert.equal(ZE.fmtEUR(950), '9,50 €');
+  assert.equal(ZE.fmtNum(120.5), '120,5');
+});
+
+test('Baustelle: Angebot in Stunden und in Euro, Hochrechnung', () => {
+  // Stunden: 20 h angeboten, 17 h gearbeitet -> 85 % -> warn
+  let st = ZE.projectStatus({ budgetMin: 1200 }, { workedMin: 1020 });
+  assert.equal(st.level, 'warn');
+  // mit Fortschritt 60 %: 17 h / 0,6 = 28,3 h -> 42 % drüber
+  st = ZE.projectStatus({ budgetMin: 1200, progressPct: 60 }, { workedMin: 1020 });
+  assert.equal(st.level, 'forecast');
+  assert.equal(st.overPct, 42);
+  // überschritten
+  assert.equal(ZE.projectStatus({ budgetMin: 600 }, { workedMin: 630 }).level, 'over');
+
+  // Euro (Beispiel aus dem Gespräch): 120 m² zu 9 €, 14 h zu 52 €, Material 130 €, 80 m² fertig
+  const p = { offerArea: 120, offerUnitPrice: 900, doneArea: 80 };
+  st = ZE.projectStatus(p, { workedMin: 14 * 60, materialCost: 13000, hourlyRate: 5200 });
+  assert.equal(st.offerSum, 108000);
+  assert.equal(st.cost, 85800);
+  assert.equal(Math.round(st.money.forecast), 128700);
+  assert.equal(st.overPct, 19);
+  assert.equal(st.level, 'forecast');
+  // ohne Stundensatz kein Euro-Vergleich
+  assert.equal(ZE.projectStatus(p, { workedMin: 840, materialCost: 13000, hourlyRate: null }).level, null);
+  // zu wenig Fortschritt für eine Hochrechnung
+  assert.equal(ZE.projectStatus({ budgetMin: 1200, progressPct: 5 }, { workedMin: 300 }).level, 'ok');
+});

@@ -23,6 +23,7 @@ const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 const ZE = require('../public/js/logic.js');
 const { openDb } = require('./db.js');
+const push = require('./push.js');
 
 const scrypt = promisify(crypto.scrypt);
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -89,6 +90,9 @@ const normCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 /** Freitext: Steuerzeichen raus, kürzen */
 const text = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
 const clone = (v) => JSON.parse(JSON.stringify(v));
+/** Dateiname nur aus ASCII-Zeichen */
+const fileSlug = (v) => String(v).toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'export';
 
 function cookies(req) {
   const out = {};
@@ -127,7 +131,7 @@ function describeEntry(e, projects) {
 function describeAbsence(a) {
   return `${ZE.absenceLabel(a)} ${ZE.fmtDate(a.from)}${a.to !== a.from ? '–' + ZE.fmtDate(a.to) : ''}`;
 }
-const STAMP_LABELS = { in: 'Kommen', out: 'Gehen', breakStart: 'Pause', breakEnd: 'Pause beendet', project: 'Projektwechsel', note: 'Notiz' };
+const STAMP_LABELS = { in: 'Kommen', out: 'Gehen', breakStart: 'Pause', breakEnd: 'Pause beendet', project: 'Baustellenwechsel', note: 'Notiz' };
 
 // ----------------------------------------------------------------- App
 function createApp(opts = {}) {
@@ -158,11 +162,24 @@ function createApp(opts = {}) {
     vacationDaysPerYear: 30,
   });
 
+  /** Angebotszahlen sieht nur das Büro */
+  function projectsFor(u) {
+    const list = db.projects();
+    if (u.role === 'admin') return list;
+    return list.map(({ budgetMin, offerArea, offerUnitPrice, offerSum, doneArea, progressPct, ...rest }) => rest);
+  }
+  function publicCompany(u) {
+    const c = db.company();
+    if (u && u.role === 'admin') return c;
+    const { hourlyRate, ...rest } = c;
+    return rest;
+  }
+
   function loadState(u) {
     const c = db.company();
     return ZE.normalizeState({
       settings: { ...u.settings, name: u.name, state: c.state, autoBreak: c.autoBreak },
-      projects: db.projects(),
+      projects: projectsFor(u),
       entries: db.entries(u.id),
       absences: db.absences(u.id),
       activeProjectId: u.activeProjectId,
@@ -277,7 +294,7 @@ function createApp(opts = {}) {
 
   route('GET', '/api/session', (c) => ({
     user: c.user ? publicUser(c.user) : null,
-    company: c.user ? db.company() : { name: db.company().name },
+    company: c.user ? publicCompany(c.user) : { name: db.company().name },
     needsSetup: db.userCount() === 0,
   }), 'none');
 
@@ -297,13 +314,13 @@ function createApp(opts = {}) {
     const id = ZE.uid();
     db.tx(() => {
       if (db.userCount() > 0) fail(409, 'Die Einrichtung ist schon abgeschlossen.');
-      db.updateCompany({ name: company, state, autoBreak: false, employeesCanEdit: true });
+      db.updateCompany({ ...db.company(), name: company, state, autoBreak: false, employeesCanEdit: true });
       db.insertUser({ id, name, username, passwordHash: hash, role: 'admin', settings: defaultSettings(), createdAt: now() });
       db.log(id, id, 'setup', 'Zeiterfassung eingerichtet', null, now());
     });
     setupCode = null;
     startSession(c, id);
-    return { user: publicUser(db.user(id)), company: db.company() };
+    return { user: publicUser(db.user(id)), company: publicCompany(db.user(id)) };
   }, 'none');
 
   route('POST', '/api/login', async (c) => {
@@ -320,7 +337,7 @@ function createApp(opts = {}) {
     }
     attempts.delete(key);
     startSession(c, row.id);
-    return { user: publicUser(db.user(row.id)), company: db.company() };
+    return { user: publicUser(db.user(row.id)), company: publicCompany(db.user(row.id)) };
   }, 'none');
 
   route('POST', '/api/logout', (c) => {
@@ -353,7 +370,7 @@ function createApp(opts = {}) {
       db.log(inv.user.id, inv.user.id, 'user.password', 'Passwort über Einladungslink festgelegt', null, now());
     });
     startSession(c, inv.user.id);
-    return { user: publicUser(db.user(inv.user.id)), company: db.company() };
+    return { user: publicUser(db.user(inv.user.id)), company: publicCompany(db.user(inv.user.id)) };
   }, 'none');
 
   route('POST', '/api/password', async (c) => {
@@ -386,7 +403,7 @@ function createApp(opts = {}) {
       projectId = b.projectId ? String(b.projectId) : null;
       if (projectId) {
         const p = db.project(projectId);
-        if (!p || p.archived) fail(422, 'Dieses Projekt gibt es nicht mehr. Bitte wähle ein anderes.');
+        if (!p || p.archived) fail(422, 'Diese Baustelle gibt es nicht mehr. Bitte wähle eine andere.');
       }
     }
     let message;
@@ -397,6 +414,7 @@ function createApp(opts = {}) {
       const r = ZE.applyStamp(st, { action: String(b.action), projectId, note: b.note }, t);
       if (r.error) fail(409, r.error);
       persistEntries(u.id, before, st.entries);
+      queueChecks();
       if ((st.activeProjectId || null) !== (u.activeProjectId || null)) db.setActiveProject(u.id, st.activeProjectId);
       if (opId) db.markOp(opId, u.id, now());
       if (b.offline) {
@@ -432,8 +450,8 @@ function createApp(opts = {}) {
     let projectId = b.projectId ? String(b.projectId) : null;
     if (projectId) {
       const p = db.project(projectId);
-      if (!p) fail(422, 'Dieses Projekt gibt es nicht mehr.');
-      if (p.archived && (!existing || existing.projectId !== projectId)) fail(422, 'Dieses Projekt ist archiviert.');
+      if (!p) fail(422, 'Diese Baustelle gibt es nicht mehr.');
+      if (p.archived && (!existing || existing.projectId !== projectId)) fail(422, 'Diese Baustelle ist archiviert.');
     }
     const cand = {
       id: existing ? existing.id : ZE.uid(), projectId, start, end, breaks, pauseMin,
@@ -451,6 +469,7 @@ function createApp(opts = {}) {
       const st = loadState(subject);
       const e = entryInput(c.body, null, st, now());
       db.upsertEntry(subject.id, e);
+      queueChecks();
       db.log(c.user.id, subject.id, 'entry.create', `Zeit nachgetragen: ${describeEntry(e, st.projects)}`, { after: e }, now());
     });
     return { state: loadState(subject) };
@@ -465,6 +484,7 @@ function createApp(opts = {}) {
       const st = loadState(subject);
       const e = entryInput(c.body, old, st, now());
       db.upsertEntry(subject.id, e);
+      queueChecks();
       db.log(c.user.id, subject.id, 'entry.update',
         `Eintrag geändert: vorher ${describeEntry(old, st.projects)}; jetzt ${describeEntry(e, st.projects)}`, { before: old, after: e }, now());
     });
@@ -478,6 +498,7 @@ function createApp(opts = {}) {
     mayEdit(c, subject);
     db.tx(() => {
       db.deleteEntry(subject.id, old.id);
+      queueChecks();
       db.log(c.user.id, subject.id, 'entry.delete', `Eintrag gelöscht: ${describeEntry(old, db.projects())}`, { before: old }, now());
     });
     return { state: loadState(subject) };
@@ -566,6 +587,8 @@ function createApp(opts = {}) {
           warnings: month.days.reduce((n, x) => n + x.warnings.filter((w) => w.code !== 'sunday').length, 0),
           tasksOpen: mine.filter((x) => x.doneAt == null).length,
           tasksDone: mine.filter((x) => x.doneAt != null).length,
+          forgotten: !!run && (ZE.dateKey(run.start) < k || t - run.start > 12 * 3600e3),
+          runStart: run ? run.start : null,
         };
       }),
     };
@@ -590,7 +613,7 @@ function createApp(opts = {}) {
     const day = String(b.day !== undefined ? b.day : old ? old.day : '');
     if (!KEY_RE.test(day)) fail(422, 'Bitte einen Tag wählen.');
     let projectId = b.projectId !== undefined ? (b.projectId ? String(b.projectId) : null) : old ? old.projectId : null;
-    if (projectId && !db.project(projectId)) fail(422, 'Dieses Projekt gibt es nicht mehr.');
+    if (projectId && !db.project(projectId)) fail(422, 'Diese Baustelle gibt es nicht mehr.');
     let assignees = b.assignees !== undefined ? b.assignees : old ? old.assignees : [];
     if (!Array.isArray(assignees) || assignees.length > 200) fail(422, 'Die Zuweisung ist ungültig.');
     assignees = [...new Set(assignees.map(String))];
@@ -733,37 +756,425 @@ function createApp(opts = {}) {
       state: c.body.state !== undefined ? (ZE.STATES[c.body.state] ? c.body.state : '') : old.state,
       autoBreak: c.body.autoBreak !== undefined ? !!c.body.autoBreak : old.autoBreak,
       employeesCanEdit: c.body.employeesCanEdit !== undefined ? !!c.body.employeesCanEdit : old.employeesCanEdit,
+      reminderTime: old.reminderTime,
+      hourlyRate: old.hourlyRate,
     };
+    if (c.body.reminderTime !== undefined) {
+      const rt = String(c.body.reminderTime || '');
+      if (rt && !/^([01]\d|2[0-3]):[0-5]\d$/.test(rt)) fail(422, 'Die Uhrzeit für die Erinnerung ist ungültig.');
+      next.reminderTime = rt;
+    }
+    if (c.body.hourlyRate !== undefined) next.hourlyRate = cents(c.body.hourlyRate, 'Der Stundensatz');
     db.updateCompany(next);
+    queueChecks();
     db.log(c.user.id, null, 'company', 'Firmeneinstellungen geändert', { before: old, after: next }, now());
     return { company: db.company() };
   }, 'admin');
 
+  /** Geldbetrag in Cent prüfen (null = leer) */
+  function cents(v, label) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0 || n > 1e10) fail(422, `${label} ist ungültig.`);
+    return n;
+  }
+  function decimal(v, label, max) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > max) fail(422, `${label} ist ungültig.`);
+    return Math.round(n * 100) / 100;
+  }
+
   function projectInput(b, old) {
-    const name = text(b.name !== undefined ? b.name : old && old.name, 80);
-    if (!name) fail(422, 'Bitte gib dem Projekt einen Namen.');
+    const pick = (k) => (b[k] !== undefined ? b[k] : old ? old[k] : null);
+    const name = text(pick('name'), 80);
+    if (!name) fail(422, 'Bitte gib der Baustelle einen Namen.');
     const color = /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : old ? old.color : ZE.COLORS[db.projects().length % ZE.COLORS.length];
+    const phone = text(pick('phone'), 40);
+    if (phone && !/^[+0-9 ()/\-]{3,40}$/.test(phone)) fail(422, 'Die Telefonnummer darf nur Ziffern, Leerzeichen und + ( ) / - enthalten.');
+    const budgetMin = b.budgetMin !== undefined ? (b.budgetMin == null || b.budgetMin === '' ? null : Math.round(decimal(b.budgetMin, 'Die Angebotsstunden', 1e6))) : old ? old.budgetMin : null;
+    const offerArea = b.offerArea !== undefined ? decimal(b.offerArea, 'Die Fläche', 1e7) : old ? old.offerArea : null;
+    const offerUnitPrice = b.offerUnitPrice !== undefined ? cents(b.offerUnitPrice, 'Der Preis je m²') : old ? old.offerUnitPrice : null;
+    let offerSum = b.offerSum !== undefined ? cents(b.offerSum, 'Die Angebotssumme') : old ? old.offerSum : null;
+    if (offerArea && offerUnitPrice != null && b.offerSum === undefined) offerSum = null; // wird aus Fläche × Preis berechnet
+    const doneArea = b.doneArea !== undefined ? decimal(b.doneArea, 'Die fertige Fläche', 1e7) : old ? old.doneArea : null;
+    let progressPct = b.progressPct !== undefined ? b.progressPct : old ? old.progressPct : null;
+    if (progressPct != null && progressPct !== '') {
+      progressPct = Number(progressPct);
+      if (!Number.isFinite(progressPct) || progressPct < 0 || progressPct > 100) fail(422, 'Der Fortschritt muss zwischen 0 und 100 % liegen.');
+      progressPct = Math.round(progressPct);
+    } else progressPct = null;
     return {
       id: old ? old.id : ZE.uid(), name, color,
-      client: text(b.client !== undefined ? b.client : old && old.client, 80),
+      client: text(pick('client'), 80),
       archived: b.archived !== undefined ? !!b.archived : !!(old && old.archived),
+      address: longText(pick('address'), 300),
+      contact: text(pick('contact'), 80),
+      phone,
+      access: longText(pick('access'), 500),
+      budgetMin: budgetMin || null,
+      offerArea: offerArea || null,
+      offerUnitPrice,
+      offerSum,
+      doneArea,
+      progressPct,
     };
   }
   route('POST', '/api/projects', (c) => {
-    db.upsertProject(projectInput(c.body, null));
-    return { projects: db.projects() };
+    const p = projectInput(c.body, null);
+    db.upsertProject(p);
+    return { projects: db.projects(), project: db.project(p.id) };
   }, 'admin');
   route('PUT', '/api/projects/:id', (c) => {
     const old = db.project(c.params.id);
-    if (!old) fail(404, 'Dieses Projekt gibt es nicht mehr.');
+    if (!old) fail(404, 'Diese Baustelle gibt es nicht mehr.');
     db.upsertProject(projectInput(c.body, old));
-    return { projects: db.projects() };
+    queueChecks();
+    return { projects: db.projects(), project: db.project(old.id) };
   }, 'admin');
   route('DELETE', '/api/projects/:id', (c) => {
-    if (!db.project(c.params.id)) fail(404, 'Dieses Projekt gibt es nicht mehr.');
-    if (db.projectInUse(c.params.id)) fail(409, 'Auf dieses Projekt sind schon Zeiten gebucht. Archiviere es stattdessen, dann bleiben die Zeiten erhalten.');
+    if (!db.project(c.params.id)) fail(404, 'Diese Baustelle gibt es nicht mehr.');
+    if (db.projectInUse(c.params.id)) fail(409, 'Auf diese Baustelle sind schon Zeiten oder Material gebucht. Archiviere sie stattdessen, dann bleibt alles erhalten.');
     db.deleteProject(c.params.id);
     return { projects: db.projects() };
+  }, 'admin');
+
+  /** Stunden und Materialkosten je Baustelle */
+  function projectFigures() {
+    const t = now();
+    const k = ZE.dateKey(t);
+    const month = k.slice(0, 7);
+    const out = new Map();
+    const get = (pid) => {
+      if (!out.has(pid)) out.set(pid, { workedMin: 0, monthMin: 0, materialCost: 0, lastAt: null, running: 0 });
+      return out.get(pid);
+    };
+    for (const e of db.projectEntries(null)) {
+      const f = get(e.projectId);
+      const m = ZE.entryNetMin(e, t);
+      f.workedMin += m;
+      if (ZE.dateKey(e.start).slice(0, 7) === month) f.monthMin += m;
+      f.lastAt = Math.max(f.lastAt || 0, e.end != null ? e.end : t);
+      if (e.end == null) f.running++;
+    }
+    for (const m of db.materials({})) {
+      const f = get(m.projectId);
+      if (m.price != null) f.materialCost += Math.round(m.quantity * m.price);
+      f.lastAt = Math.max(f.lastAt || 0, m.createdAt);
+    }
+    return out;
+  }
+  function statusOf(p, f, rate) {
+    return ZE.projectStatus(p, { workedMin: f ? f.workedMin : 0, materialCost: f ? f.materialCost : 0, hourlyRate: rate });
+  }
+
+  route('GET', '/api/projects/summary', () => {
+    const figures = projectFigures();
+    const open = db.openTasksByProject();
+    const rate = db.company().hourlyRate;
+    return {
+      hourlyRate: rate,
+      projects: db.projects().map((p) => {
+        const f = figures.get(p.id) || { workedMin: 0, monthMin: 0, materialCost: 0, lastAt: null, running: 0 };
+        return { id: p.id, ...f, openTasks: open[p.id] || 0, status: statusOf(p, f, rate) };
+      }),
+    };
+  }, 'admin');
+
+  route('GET', '/api/projects/:id/report', (c) => {
+    const p = db.project(c.params.id);
+    if (!p) fail(404, 'Diese Baustelle gibt es nicht mehr.');
+    const t = now();
+    const entries = db.projectEntries(p.id);
+    const perUser = new Map();
+    const months = new Map();
+    let workedMin = 0;
+    const list = entries.map((e) => {
+      const min = ZE.entryNetMin(e, t);
+      workedMin += min;
+      const u = perUser.get(e.userId) || { userId: e.userId, name: e.userName, min: 0 };
+      u.min += min;
+      perUser.set(e.userId, u);
+      const mk = ZE.dateKey(e.start).slice(0, 7);
+      months.set(mk, (months.get(mk) || 0) + min);
+      return { id: e.id, userId: e.userId, userName: e.userName, start: e.start, end: e.end, min, note: e.note, manual: e.manual };
+    });
+    const materials = db.materials({ projectId: p.id });
+    const sums = new Map();
+    let materialCost = 0;
+    for (const m of materials) {
+      const key = m.item.toLowerCase() + '|' + m.unit;
+      const x = sums.get(key) || { item: m.item, unit: m.unit, quantity: 0, cost: 0, priced: true };
+      x.quantity = Math.round((x.quantity + m.quantity) * 100) / 100;
+      if (m.price != null) {
+        const cost = Math.round(m.quantity * m.price);
+        x.cost += cost;
+        materialCost += cost;
+      } else x.priced = false;
+      sums.set(key, x);
+    }
+    const tasks = db.tasksOfProject(p.id);
+    const rate = db.company().hourlyRate;
+    return {
+      project: p,
+      hourlyRate: rate,
+      status: ZE.projectStatus(p, { workedMin, materialCost, hourlyRate: rate }),
+      workedMin,
+      perUser: [...perUser.values()].sort((a, b) => b.min - a.min),
+      months: [...months.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([month, min]) => ({ month, min })),
+      entries: list.slice(0, 100),
+      materials: materials.slice(0, 200),
+      materialSums: [...sums.values()].sort((a, b) => a.item.localeCompare(b.item, 'de')),
+      tasks: { open: tasks.filter((x) => x.doneAt == null).length, done: tasks.filter((x) => x.doneAt != null).length, list: tasks.slice(0, 30).map(publicTask) },
+    };
+  }, 'admin');
+
+  route('PUT', '/api/projects/:id/progress', (c) => {
+    const old = db.project(c.params.id);
+    if (!old) fail(404, 'Diese Baustelle gibt es nicht mehr.');
+    const next = projectInput({ doneArea: c.body.doneArea, progressPct: c.body.progressPct }, old);
+    if (next.offerArea && next.doneArea != null && next.doneArea > next.offerArea * 2) fail(422, 'Die fertige Fläche ist größer als doppelt so groß wie angeboten. Bitte prüfen.');
+    db.upsertProject(next);
+    queueChecks();
+    return { project: db.project(old.id) };
+  }, 'admin');
+
+  // ------------------------------------------------------------- Material
+  const UNITS = ['Stück', 'l', 'kg', 'm', 'm²', 'Rolle', 'Eimer', 'Dose', 'Kartusche', 'Packung', 'Sack'];
+
+  route('GET', '/api/materials', (c) => {
+    const q = c.url.searchParams;
+    const me = db.user(c.user.id);
+    const from = q.get('from') || null;
+    const to = q.get('to') || null;
+    if ((from && !KEY_RE.test(from)) || (to && !KEY_RE.test(to))) fail(400, 'Zeitraum ungültig.');
+    const mine = me.role !== 'admin' || q.get('mine') === '1';
+    return {
+      materials: db.materials({ projectId: q.get('projectId') || null, userId: mine ? me.id : null, from, to }),
+      items: db.materialItems(),
+      units: UNITS,
+    };
+  });
+
+  route('POST', '/api/materials', (c) => {
+    const b = c.body;
+    const p = db.project(String(b.projectId || ''));
+    if (!p) fail(422, 'Bitte wähle eine Baustelle.');
+    const k = ZE.dateKey(now());
+    const day = String(b.day || k);
+    if (!KEY_RE.test(day) || day > ZE.addDays(k, 1)) fail(422, 'Das Datum ist ungültig.');
+    const item = text(b.item, 80);
+    if (!item) fail(422, 'Bitte schreib, welches Material.');
+    const quantity = decimal(b.quantity, 'Die Menge', 1e6);
+    if (!(quantity > 0)) fail(422, 'Bitte gib eine Menge an.');
+    const unit = text(b.unit, 20);
+    const m = {
+      id: ZE.uid(), projectId: p.id, userId: c.user.id, day, item, quantity, unit,
+      price: cents(b.price, 'Der Preis'), note: text(b.note, 200), createdAt: now(),
+    };
+    db.insertMaterial(m);
+    queueChecks();
+    return { material: { ...m, userName: c.user.name } };
+  });
+
+  route('DELETE', '/api/materials/:id', (c) => {
+    const m = db.material(c.params.id);
+    if (!m) fail(404, 'Diesen Eintrag gibt es nicht mehr.');
+    if (c.user.role !== 'admin' && m.userId !== c.user.id) fail(403, 'Diesen Eintrag hat jemand anderes gemacht. Löschen kann ihn nur das Büro.');
+    db.deleteMaterial(m.id);
+    queueChecks();
+    return { ok: true };
+  });
+
+  // ------------------------------------------------------------ Wochenplan
+  route('GET', '/api/plan', (c) => {
+    const from = c.url.searchParams.get('from');
+    const to = c.url.searchParams.get('to');
+    if (!KEY_RE.test(from || '') || !KEY_RE.test(to || '') || to < from || ZE.daysBetween(from, to).length > 14) fail(400, 'Zeitraum ungültig.');
+    return {
+      users: db.users().filter((u) => u.active).map((u) => ({ id: u.id, name: u.name, role: u.role })),
+      tasks: db.tasksOfMonth(from, to).map(publicTask),
+      absences: db.absencesBetween(from, to),
+    };
+  }, 'admin');
+
+  // ------------------------------------------------------- Mitteilungen
+  function vapidKeys() {
+    let k = db.vapidKeys();
+    if (!k) {
+      k = push.generateVapidKeys();
+      db.setVapidKeys(k);
+    }
+    return k;
+  }
+  const pushSender = opts.pushSender || ((sub, data) => {
+    const subject = /^https:\/\//.test(sub.origin) ? sub.origin : 'mailto:zeiterfassung@localhost';
+    return push.sendPush(sub, data, vapidKeys(), subject, now());
+  });
+  async function sendToUser(userId, data) {
+    let sent = 0;
+    for (const sub of db.subscriptionsOf(userId)) {
+      try {
+        const status = await pushSender(sub, data);
+        if (status === 404 || status === 410) db.deleteSubscription(sub.endpoint);
+        else if (status >= 200 && status < 300) sent++;
+        else console.warn('Mitteilung nicht zugestellt', status);
+      } catch (err) {
+        console.warn('Mitteilung fehlgeschlagen', err.message);
+      }
+    }
+    return sent;
+  }
+  async function notifyAdmins(data) {
+    for (const u of db.users()) if (u.active && u.role === 'admin') await sendToUser(u.id, data);
+  }
+
+  route('GET', '/api/push/key', () => ({ key: vapidKeys().publicKey }));
+
+  route('POST', '/api/push/subscribe', (c) => {
+    const endpoint = String(c.body.endpoint || '');
+    const keys = c.body.keys || {};
+    if (!push.allowedEndpoint(endpoint)) fail(422, 'Dieser Mitteilungsdienst wird nicht unterstützt.');
+    const p256dh = String(keys.p256dh || '');
+    const auth = String(keys.auth || '');
+    if (Buffer.from(p256dh, 'base64url').length !== 65 || Buffer.from(auth, 'base64url').length < 16) fail(422, 'Das Abo ist unvollständig.');
+    const origin = publicUrl || `${c.secure ? 'https' : 'http'}://${c.req.headers.host}`;
+    db.saveSubscription({ endpoint, userId: c.user.id, p256dh, auth, origin, createdAt: now() });
+    return { ok: true };
+  });
+
+  route('POST', '/api/push/unsubscribe', (c) => {
+    db.deleteSubscription(String(c.body.endpoint || ''), c.user.id);
+    return { ok: true };
+  });
+
+  route('POST', '/api/push/test', async (c) => {
+    if (!db.subscriptionsOf(c.user.id).length) fail(409, 'Auf diesem Gerät sind Erinnerungen noch nicht eingeschaltet.');
+    const sent = await sendToUser(c.user.id, { title: 'Zeiterfassung', body: 'So sehen Erinnerungen aus. Alles eingerichtet.', url: '/#heute', tag: 'test' });
+    if (!sent) fail(502, 'Die Mitteilung konnte nicht zugestellt werden. Schalte die Erinnerungen aus und wieder ein.');
+    return { sent };
+  });
+
+  /** Erinnert an vergessenes Ausstempeln (abends zur eingestellten Uhrzeit, bei Nacht-Einträgen morgens) */
+  async function checkReminders() {
+    const c = db.company();
+    if (!c.reminderTime) return;
+    const t = now();
+    const k = ZE.dateKey(t);
+    const hhmm = ZE.timeOfDay(t);
+    for (const e of db.runningEntries()) {
+      const u = db.user(e.userId);
+      if (!u || !u.active) continue;
+      const overnight = ZE.dateKey(e.start) < k;
+      const due = overnight ? hhmm >= '07:00' : hhmm >= c.reminderTime && ZE.timeOfDay(e.start) < c.reminderTime;
+      if (!due) continue;
+      const key = `clockout|${e.id}|${k}`;
+      if (db.pushLogged(key) || !db.subscriptionsOf(u.id).length) continue;
+      db.logPush(key, t);
+      const since = overnight ? `${ZE.WEEKDAYS_LONG[ZE.weekday(ZE.dateKey(e.start))]} ${ZE.timeOfDay(e.start)} Uhr` : `${ZE.timeOfDay(e.start)} Uhr`;
+      await sendToUser(u.id, {
+        title: 'Noch eingestempelt',
+        body: `Du bist seit ${since} eingestempelt. Vergessen auszustempeln?`,
+        url: '/#heute',
+        tag: 'clockout',
+      });
+    }
+  }
+
+  /** Warnt das Büro, wenn eine Baustelle das Angebot zu sprengen droht */
+  async function checkBudgets() {
+    const figures = projectFigures();
+    const rate = db.company().hourlyRate;
+    for (const p of db.projects()) {
+      if (p.archived) continue;
+      const st = statusOf(p, figures.get(p.id), rate);
+      if (!st.level || st.level === 'ok') continue;
+      const sig = `${p.budgetMin || ''}|${st.offerSum || ''}`;
+      let key;
+      let title;
+      if (st.level === 'over') {
+        key = `budget|${p.id}|${sig}|over`;
+        title = `${p.name}: Angebot überschritten`;
+      } else if (st.level === 'forecast') {
+        key = `budget|${p.id}|${sig}|forecast|${Math.floor(st.overPct / 10) * 10}`;
+        title = `${p.name}: voraussichtlich ${st.overPct} % über dem Angebot`;
+      } else {
+        key = `budget|${p.id}|${sig}|warn`;
+        title = `${p.name}: 80 % des Angebots verbraucht`;
+      }
+      if (db.pushLogged(key)) continue;
+      db.logPush(key, now());
+      const parts = [];
+      if (st.hours) parts.push(`${ZE.fmtHM(st.hours.used)} von ${ZE.fmtHM(st.hours.budget)} Std.`);
+      if (st.money) parts.push(`${ZE.fmtEUR(st.money.used)} von ${ZE.fmtEUR(st.money.budget)}`);
+      if (st.progress != null) parts.push(`${Math.round(st.progress * 100)} % fertig`);
+      await notifyAdmins({ title, body: parts.join(', '), url: `/#baustellen/${p.id}`, tag: `budget-${p.id}` });
+    }
+  }
+
+  let checking = null;
+  async function runChecks() {
+    if (checking) return checking;
+    checking = (async () => {
+      try {
+        await checkReminders();
+        await checkBudgets();
+      } catch (err) {
+        console.error('Prüfung fehlgeschlagen', err);
+      } finally {
+        checking = null;
+      }
+    })();
+    return checking;
+  }
+  let queued = null;
+  /** Nach einer Änderung kurz danach prüfen (gebündelt) */
+  function queueChecks() {
+    if (opts.manualChecks || queued) return;
+    queued = setTimeout(() => {
+      queued = null;
+      runChecks();
+    }, 1500);
+    queued.unref();
+  }
+
+  // ----------------------------------------------------- Projekt-Export
+  route('GET', '/api/export/project.csv', (c) => {
+    const p = db.project(String(c.url.searchParams.get('id') || ''));
+    if (!p) fail(404, 'Diese Baustelle gibt es nicht mehr.');
+    const t = now();
+    const rows = [[`Baustelle: ${ZE.csvText(p.name)}${p.client ? ' – ' + ZE.csvText(p.client) : ''}`], [], ['Zeiten'],
+      ['Datum', 'Wochentag', 'Mitarbeiter', 'Beginn', 'Ende', 'Pause (Min.)', 'Dauer (h:mm)', 'Dauer (Std.)', 'Notiz', 'Nachgetragen']];
+    let workedMin = 0;
+    for (const e of db.projectEntries(p.id).reverse()) {
+      const m = ZE.entryMs(e, t);
+      const net = Math.round(m.net / ZE.MIN);
+      workedMin += net;
+      const k = ZE.dateKey(e.start);
+      rows.push([ZE.fmtDate(k), ZE.WEEKDAYS_SHORT[ZE.weekday(k)], ZE.csvText(e.userName), ZE.timeOfDay(e.start),
+        e.end != null ? ZE.timeOfDay(e.end) : 'läuft', Math.round(m.brk / ZE.MIN), ZE.fmtHM(net, { ascii: true }), ZE.fmtDec(net),
+        ZE.csvText(e.note), e.manual ? 'ja' : '']);
+    }
+    rows.push(['Summe', '', '', '', '', '', ZE.fmtHM(workedMin, { ascii: true }), ZE.fmtDec(workedMin), '', '']);
+    rows.push([], ['Material'], ['Datum', 'Mitarbeiter', 'Material', 'Menge', 'Einheit', 'Preis je Einheit', 'Summe', 'Notiz']);
+    let materialCost = 0;
+    for (const m of db.materials({ projectId: p.id }).reverse()) {
+      const cost = m.price != null ? Math.round(m.quantity * m.price) : null;
+      if (cost != null) materialCost += cost;
+      rows.push([ZE.fmtDate(m.day), ZE.csvText(m.userName), ZE.csvText(m.item), ZE.fmtNum(m.quantity), ZE.csvText(m.unit),
+        m.price != null ? (m.price / 100).toFixed(2).replace('.', ',') : '', cost != null ? (cost / 100).toFixed(2).replace('.', ',') : '', ZE.csvText(m.note)]);
+    }
+    const st = ZE.projectStatus(p, { workedMin, materialCost, hourlyRate: db.company().hourlyRate });
+    const eur = (v) => (v == null ? '' : (v / 100).toFixed(2).replace('.', ','));
+    rows.push([], ['Auswertung'],
+      ['Stunden gesamt', ZE.fmtDec(workedMin)],
+      ['Angebot Stunden', p.budgetMin ? ZE.fmtDec(p.budgetMin) : ''],
+      ['Angebotssumme netto (€)', eur(st.offerSum)],
+      ['Lohnkosten (€)', eur(st.laborCost)],
+      ['Materialkosten (€)', eur(materialCost)],
+      ['Kosten gesamt (€)', eur(st.cost)],
+      ['Fertig (%)', st.progress != null ? Math.round(st.progress * 100) : '']);
+    return { raw: '﻿' + ZE.toCSV(rows), headers: csvHeaders(`baustelle-${fileSlug(p.name)}.csv`) };
   }, 'admin');
 
   // ----------------------------------------------------- Export & Backup
@@ -825,7 +1236,7 @@ function createApp(opts = {}) {
     const [, to] = ZE.monthRange(+tag.slice(0, 4), +tag.slice(5, 7));
     const users = new Map(db.users().map((u) => [u.id, u]));
     const projects = new Map(db.projects().map((p) => [p.id, p]));
-    const rows = [['Tag', 'Datum', 'Aufgabe', 'Details', 'Projekt', 'Kunde', 'Für', 'Erledigt', 'Erledigt von', 'Erledigt am', 'Notiz']];
+    const rows = [['Tag', 'Datum', 'Aufgabe', 'Details', 'Baustelle', 'Kunde', 'Für', 'Erledigt', 'Erledigt von', 'Erledigt am', 'Notiz']];
     for (const x of db.tasksOfMonth(from, to)) {
       const p = projects.get(x.projectId);
       const by = x.doneBy ? users.get(x.doneBy) : null;
@@ -953,17 +1364,23 @@ function createApp(opts = {}) {
   }
 
   const server = http.createServer((req, res) => { handle(req, res); });
+  const checker = opts.manualChecks ? null : setInterval(runChecks, 5 * 60e3);
+  if (checker) checker.unref();
   const timer = setInterval(() => {
     db.cleanup(now());
     for (const [k, a] of attempts) if (a.until < now()) attempts.delete(k);
   }, 3600e3);
   timer.unref();
-  server.on('close', () => clearInterval(timer));
+  server.on('close', () => {
+    clearInterval(timer);
+    if (checker) clearInterval(checker);
+  });
 
   return {
     server,
     db,
     get setupCode() { return setupCode; },
+    runChecks,
   };
 }
 

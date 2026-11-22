@@ -298,17 +298,221 @@ test('Datenbank von Version 1 wird ohne Datenverlust erweitert', async () => {
   const os = require('node:os');
   const path = require('node:path');
   const fs = require('node:fs');
+  const { openDb, SCHEMA_V1 } = require('../server/db.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ze-mig-'));
   const file = path.join(dir, 'z.db');
-  const { openDb } = require('../server/db.js');
+  // echte Version-1-Datenbank mit Inhalt anlegen
+  const raw = new DatabaseSync(file);
+  raw.exec(SCHEMA_V1);
+  raw.exec('PRAGMA user_version = 1');
+  raw.prepare("INSERT INTO users (id, name, username, role, settings, created_at) VALUES ('u1', 'Alt', 'alt', 'admin', '{}', 1)").run();
+  raw.prepare("INSERT INTO projects (id, name, client, color) VALUES ('p1', 'Huber', 'Fam. Huber', '#0f766e')").run();
+  raw.prepare("INSERT INTO entries (id, user_id, project_id, start_at, end_at) VALUES ('e1', 'u1', 'p1', 1000, 2000)").run();
+  raw.close();
+
   const repo = openDb(file);
-  repo.insertUser({ id: 'u1', name: 'Alt', username: 'alt', role: 'admin', settings: {} });
-  repo.db.exec('DROP TABLE tasks; PRAGMA user_version = 1');
+  assert.equal(repo.db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(repo.user('u1').name, 'Alt');
+  const p = repo.project('p1');
+  assert.equal(p.name, 'Huber');
+  assert.equal(p.address, '');
+  assert.equal(p.budgetMin, null);
+  assert.equal(repo.entries('u1').length, 1);
+  assert.equal(repo.company().reminderTime, '20:00');
+  assert.deepEqual(repo.tasksInRange('2026-01-01', '2026-12-31'), []);
   repo.close();
+  // zweites Öffnen ändert nichts mehr
   const again = openDb(file);
-  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, 2);
-  assert.equal(again.user('u1').name, 'Alt');
-  assert.deepEqual(again.tasksInRange('2026-01-01', '2026-12-31'), []);
+  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, 3);
   again.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ------------------------------------------------------------------ Baustellen, Material, Erinnerungen
+const crypto = require('node:crypto');
+const push = require('../server/push.js');
+
+function fakeSubscription(name) {
+  const ua = crypto.createECDH('prime256v1');
+  return {
+    ua,
+    auth: crypto.randomBytes(16),
+    body: { endpoint: `https://web.push.apple.com/${name}`, keys: { p256dh: ua.generateKeys().toString('base64url'), auth: '' } },
+  };
+}
+
+test('Push: Nachricht ist nach RFC 8291 entschlüsselbar, VAPID-Signatur gültig', () => {
+  const ua = crypto.createECDH('prime256v1');
+  const uaPub = ua.generateKeys();
+  const auth = crypto.randomBytes(16);
+  const body = push.encrypt('{"title":"Hallo"}', uaPub.toString('base64url'), auth.toString('base64url'));
+  const salt = body.subarray(0, 16);
+  assert.equal(body.readUInt32BE(16), 4096);
+  const idlen = body[20];
+  const asPub = body.subarray(21, 21 + idlen);
+  const ct = body.subarray(21 + idlen);
+  const secret = ua.computeSecret(asPub);
+  const ikm = Buffer.from(crypto.hkdfSync('sha256', secret, auth, Buffer.concat([Buffer.from('WebPush: info\0'), uaPub, asPub]), 32));
+  const cek = Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from('Content-Encoding: aes128gcm\0'), 16));
+  const nonce = Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from('Content-Encoding: nonce\0'), 12));
+  const d = crypto.createDecipheriv('aes-128-gcm', cek, nonce);
+  d.setAuthTag(ct.subarray(ct.length - 16));
+  const plain = Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]);
+  assert.equal(plain[plain.length - 1], 2);
+  assert.equal(plain.subarray(0, -1).toString(), '{"title":"Hallo"}');
+
+  const keys = push.generateVapidKeys();
+  const hdr = push.vapidHeader('https://web.push.apple.com/abc', keys, 'https://zeit.example.de', Date.now());
+  const [, jwt, k] = /^vapid t=([^,]+), k=(.+)$/.exec(hdr);
+  assert.equal(k, keys.publicKey);
+  const [h, pl, sig] = jwt.split('.');
+  assert.equal(JSON.parse(Buffer.from(pl, 'base64url')).aud, 'https://web.push.apple.com');
+  const raw = Buffer.from(keys.publicKey, 'base64url');
+  const pub = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+  assert.ok(crypto.verify('sha256', Buffer.from(`${h}.${pl}`), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')));
+
+  assert.equal(push.allowedEndpoint('https://fcm.googleapis.com/fcm/send/x'), true);
+  assert.equal(push.allowedEndpoint('https://evil.example/push.apple.com'), false);
+  assert.equal(push.allowedEndpoint('http://web.push.apple.com/x'), false);
+  assert.equal(push.allowedEndpoint('https://169.254.169.254/latest'), false);
+});
+
+test('Baustellen: Infos, Angebot nur fürs Büro, Material, Auswertung, Warnung', async () => {
+  const sent = [];
+  const s = await start({ manualChecks: true, pushSender: async (sub, data) => { sent.push({ to: sub.userId, ...data }); return 201; } });
+  const admin = await setupCompany(s);
+  const anna = await addEmployee(s, admin, 'Anna', 'anna');
+  await admin('PUT', '/api/company', { hourlyRate: 5200 });
+
+  // Baustelle mit Infos und Angebot in m²
+  let r = await admin('POST', '/api/projects', {
+    name: 'Wohnung Huber', client: 'Familie Huber', address: 'Hauptstraße 5\n79098 Freiburg', contact: 'Frau Huber',
+    phone: '0761 123456', access: 'Schlüssel beim Hausmeister', offerArea: 120, offerUnitPrice: 900,
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const pid = r.data.project.id;
+  assert.equal(r.data.project.offerUnitPrice, 900);
+  assert.equal((await admin('POST', '/api/projects', { name: 'X', phone: 'abc' })).status, 422);
+
+  // Mitarbeiter sieht Adresse, aber keine Angebotszahlen und keinen Stundensatz
+  const st = (await anna.emp('GET', '/api/state')).data.state;
+  const ap = st.projects.find((p) => p.id === pid);
+  assert.equal(ap.address, 'Hauptstraße 5\n79098 Freiburg');
+  assert.equal(ap.offerUnitPrice, null);
+  assert.equal((await anna.emp('GET', '/api/session')).data.company.hourlyRate, undefined);
+  assert.equal((await admin('GET', '/api/session')).data.company.hourlyRate, 5200);
+  assert.equal((await anna.emp('GET', '/api/projects/summary')).status, 403);
+
+  // Admin abonniert Mitteilungen
+  const sub = fakeSubscription('admin');
+  sub.body.keys.auth = crypto.randomBytes(16).toString('base64url');
+  assert.equal((await admin('POST', '/api/push/subscribe', { endpoint: 'https://evil.example/x', keys: sub.body.keys })).status, 422);
+  assert.equal((await admin('POST', '/api/push/subscribe', sub.body)).status, 200);
+
+  // Anna arbeitet 14 h auf der Baustelle (zwei Tage) und trägt Material ein
+  s.clock.t = at('2026-11-16', '07:00');
+  await anna.emp('POST', '/api/stamp', { action: 'in', projectId: pid });
+  s.clock.t = at('2026-11-16', '14:00');
+  await anna.emp('POST', '/api/stamp', { action: 'out' });
+  s.clock.t = at('2026-11-17', '07:00');
+  await anna.emp('POST', '/api/stamp', { action: 'in', projectId: pid });
+  s.clock.t = at('2026-11-17', '14:00');
+  await anna.emp('POST', '/api/stamp', { action: 'out' });
+  r = await anna.emp('POST', '/api/materials', { projectId: pid, item: 'Wandfarbe weiß', quantity: 2, unit: 'Eimer', price: 6500 });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const matId = r.data.material.id;
+  assert.equal((await anna.emp('POST', '/api/materials', { projectId: pid, item: '', quantity: 1 })).status, 422);
+  assert.equal((await anna.emp('GET', '/api/materials')).data.items[0].item, 'Wandfarbe weiß');
+
+  // ohne Fortschritt: 858 € von 1.080 € = 79 % -> noch keine Warnung
+  await s.app.runChecks();
+  assert.equal(sent.length, 0);
+
+  // Fortschritt 80 von 120 m² -> Hochrechnung 1.287 € = 19 % drüber
+  assert.equal((await anna.emp('PUT', `/api/projects/${pid}/progress`, { doneArea: 80 })).status, 403);
+  await admin('PUT', `/api/projects/${pid}/progress`, { doneArea: 80 });
+  await s.app.runChecks();
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].title, /Wohnung Huber: voraussichtlich 19 % über dem Angebot/);
+  assert.match(sent[0].body, /858 € von 1\.080 €, 67 % fertig/);
+  await s.app.runChecks();
+  assert.equal(sent.length, 1); // nicht doppelt
+
+  const rep = (await admin('GET', `/api/projects/${pid}/report`)).data;
+  assert.equal(rep.workedMin, 14 * 60);
+  assert.equal(rep.status.level, 'forecast');
+  assert.deepEqual(rep.perUser.map((u) => [u.name, u.min]), [['Anna', 840]]);
+  assert.deepEqual(rep.materialSums, [{ item: 'Wandfarbe weiß', unit: 'Eimer', quantity: 2, cost: 13000, priced: true }]);
+  const sum = (await admin('GET', '/api/projects/summary')).data.projects.find((p) => p.id === pid);
+  assert.equal(sum.workedMin, 840);
+  assert.equal(sum.materialCost, 13000);
+
+  // Material löschen: nur eigene oder Büro
+  const ben = await addEmployee(s, admin, 'Ben', 'ben');
+  assert.equal((await ben.emp('DELETE', `/api/materials/${matId}`)).status, 403);
+  assert.equal((await anna.emp('DELETE', `/api/materials/${matId}`)).status, 200);
+
+  // Baustelle mit Zeiten lässt sich nicht löschen
+  assert.equal((await admin('DELETE', `/api/projects/${pid}`)).status, 409);
+
+  const csv = await admin('GET', `/api/export/project.csv?id=${pid}`);
+  assert.equal(csv.status, 200);
+  assert.match(csv.headers.get('content-disposition'), /baustelle-wohnung-huber\.csv/);
+  assert.match(csv.data, /Stunden gesamt;14,00/);
+  await s.close();
+});
+
+test('Erinnerung bei vergessenem Ausstempeln und Wochenplan', async () => {
+  const sent = [];
+  const s = await start({ manualChecks: true, pushSender: async (sub, data) => { sent.push({ to: sub.userId, ...data }); return 201; } });
+  const admin = await setupCompany(s);
+  const anna = await addEmployee(s, admin, 'Anna', 'anna');
+  const sub = fakeSubscription('anna');
+  sub.body.keys.auth = crypto.randomBytes(16).toString('base64url');
+  await anna.emp('POST', '/api/push/subscribe', sub.body);
+
+  s.clock.t = at('2026-11-16', '07:00');
+  await anna.emp('POST', '/api/stamp', { action: 'in' });
+  s.clock.t = at('2026-11-16', '19:55');
+  await s.app.runChecks();
+  assert.equal(sent.length, 0);
+  s.clock.t = at('2026-11-16', '20:05');
+  await s.app.runChecks();
+  await s.app.runChecks();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, anna.id);
+  assert.match(sent[0].body, /seit 07:00 Uhr eingestempelt/);
+
+  // Team zeigt „vergessen“, am nächsten Morgen kommt noch eine Erinnerung
+  s.clock.t = at('2026-11-17', '06:30');
+  let team = (await admin('GET', '/api/team')).data.users;
+  assert.equal(team.find((u) => u.id === anna.id).forgotten, true);
+  await s.app.runChecks();
+  assert.equal(sent.length, 1);
+  s.clock.t = at('2026-11-17', '07:05');
+  await s.app.runChecks();
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].body, /seit Montag 07:00 Uhr/);
+
+  // Erinnerung abschaltbar
+  await admin('PUT', '/api/company', { reminderTime: '' });
+  assert.equal((await admin('PUT', '/api/company', { reminderTime: '25:00' })).status, 422);
+
+  // Wochenplan
+  await admin('POST', '/api/tasks', { title: 'Streichen', day: '2026-11-18', assignees: [anna.id] });
+  await anna.emp('POST', '/api/absences', { type: 'urlaub', from: '2026-11-19', to: '2026-11-20' });
+  const plan = await admin('GET', '/api/plan?from=2026-11-16&to=2026-11-22');
+  assert.equal(plan.status, 200);
+  assert.deepEqual(plan.data.tasks.map((x) => x.title), ['Streichen']);
+  assert.equal(plan.data.absences[0].userId, anna.id);
+  assert.equal(plan.data.users.length, 2);
+  assert.equal((await anna.emp('GET', '/api/plan?from=2026-11-16&to=2026-11-22')).status, 403);
+  assert.equal((await admin('GET', '/api/plan?from=2026-11-01&to=2026-11-30')).status, 400);
+
+  // Test-Mitteilung
+  const t = await anna.emp('POST', '/api/push/test', {});
+  assert.equal(t.data.sent, 1);
+  await anna.emp('POST', '/api/push/unsubscribe', { endpoint: sub.body.endpoint });
+  assert.equal((await anna.emp('POST', '/api/push/test', {})).status, 409);
+  await s.close();
 });

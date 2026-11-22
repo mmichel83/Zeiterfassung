@@ -111,6 +111,12 @@ function openDb(file) {
     db.exec('PRAGMA user_version = 2');
     db.exec('COMMIT');
   }
+  if (version < 3) {
+    db.exec('BEGIN');
+    db.exec(SCHEMA_V3);
+    db.exec('PRAGMA user_version = 3');
+    db.exec('COMMIT');
+  }
   return new Repo(db);
 }
 
@@ -131,6 +137,54 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_day ON tasks (day);
 CREATE INDEX tasks_open ON tasks (done_at, day);
+`;
+
+// Version 3: Baustellen-Infos, Material, Erinnerungen per Push
+const SCHEMA_V3 = `
+ALTER TABLE projects ADD COLUMN address TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN contact TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN phone TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN access TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN budget_min INTEGER;
+ALTER TABLE projects ADD COLUMN offer_area REAL;
+ALTER TABLE projects ADD COLUMN offer_unit_price INTEGER;
+ALTER TABLE projects ADD COLUMN offer_sum INTEGER;
+ALTER TABLE projects ADD COLUMN done_area REAL;
+ALTER TABLE projects ADD COLUMN progress_pct INTEGER;
+ALTER TABLE company ADD COLUMN reminder_time TEXT NOT NULL DEFAULT '20:00';
+ALTER TABLE company ADD COLUMN hourly_rate INTEGER;
+ALTER TABLE company ADD COLUMN vapid_public TEXT;
+ALTER TABLE company ADD COLUMN vapid_private TEXT;
+
+CREATE TABLE materials (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  item TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  unit TEXT NOT NULL DEFAULT '',
+  price INTEGER,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX materials_project ON materials (project_id, day);
+CREATE INDEX materials_user ON materials (user_id, day);
+
+CREATE TABLE push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- bereits verschickte Erinnerungen (nicht doppelt senden)
+CREATE TABLE push_log (
+  key TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 `;
 
 const json = (v, d) => {
@@ -167,11 +221,24 @@ class Repo {
   // ---------------------------------------------------------------- Firma
   company() {
     const r = this.s('SELECT * FROM company WHERE id = 1').get();
-    return { name: r.name, state: r.state, autoBreak: !!r.auto_break, employeesCanEdit: !!r.employees_can_edit };
+    return {
+      name: r.name, state: r.state, autoBreak: !!r.auto_break, employeesCanEdit: !!r.employees_can_edit,
+      reminderTime: r.reminder_time || '',
+      hourlyRate: r.hourly_rate == null ? null : r.hourly_rate,
+    };
   }
   updateCompany(c) {
-    this.s('UPDATE company SET name = ?, state = ?, auto_break = ?, employees_can_edit = ? WHERE id = 1')
-      .run(c.name, c.state, c.autoBreak ? 1 : 0, c.employeesCanEdit ? 1 : 0);
+    this.s(`UPDATE company SET name = ?, state = ?, auto_break = ?, employees_can_edit = ?, reminder_time = ?,
+            hourly_rate = ? WHERE id = 1`)
+      .run(c.name, c.state, c.autoBreak ? 1 : 0, c.employeesCanEdit ? 1 : 0, c.reminderTime || '',
+        c.hourlyRate == null ? null : c.hourlyRate);
+  }
+  vapidKeys() {
+    const r = this.s('SELECT vapid_public, vapid_private FROM company WHERE id = 1').get();
+    return r.vapid_public ? { publicKey: r.vapid_public, privateJwk: json(r.vapid_private, null) } : null;
+  }
+  setVapidKeys(k) {
+    this.s('UPDATE company SET vapid_public = ?, vapid_private = ? WHERE id = 1').run(k.publicKey, JSON.stringify(k.privateJwk));
   }
 
   // ------------------------------------------------------------- Benutzer
@@ -233,21 +300,54 @@ class Repo {
     this.s('DELETE FROM sessions WHERE expires_at < ?').run(t);
     this.s('DELETE FROM invites WHERE expires_at < ?').run(t);
     this.s('DELETE FROM stamp_ops WHERE at < ?').run(t - 30 * 864e5);
+    this.s('DELETE FROM push_log WHERE at < ?').run(t - 30 * 864e5);
   }
 
   // ------------------------------------------------------------- Projekte
+  static project(r) {
+    return {
+      id: r.id, name: r.name, client: r.client, color: r.color, archived: !!r.archived,
+      address: r.address || '', contact: r.contact || '', phone: r.phone || '', access: r.access || '',
+      budgetMin: r.budget_min == null ? null : r.budget_min,
+      offerArea: r.offer_area == null ? null : r.offer_area,
+      offerUnitPrice: r.offer_unit_price == null ? null : r.offer_unit_price,
+      offerSum: r.offer_sum == null ? null : r.offer_sum,
+      doneArea: r.done_area == null ? null : r.done_area,
+      progressPct: r.progress_pct == null ? null : r.progress_pct,
+    };
+  }
   projects() {
-    return this.s('SELECT * FROM projects ORDER BY archived, name COLLATE NOCASE').all()
-      .map((r) => ({ id: r.id, name: r.name, client: r.client, color: r.color, archived: !!r.archived }));
+    return this.s('SELECT * FROM projects ORDER BY archived, name COLLATE NOCASE').all().map(Repo.project);
   }
-  project(id) { return this.projects().find((p) => p.id === id) || null; }
+  project(id) {
+    const r = this.s('SELECT * FROM projects WHERE id = ?').get(id);
+    return r ? Repo.project(r) : null;
+  }
   upsertProject(p) {
-    this.s(`INSERT INTO projects (id, name, client, color, archived) VALUES (?, ?, ?, ?, ?)
+    const n = (v) => (v == null ? null : v);
+    this.s(`INSERT INTO projects (id, name, client, color, archived, address, contact, phone, access, budget_min,
+            offer_area, offer_unit_price, offer_sum, done_area, progress_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET name = excluded.name, client = excluded.client,
-            color = excluded.color, archived = excluded.archived`)
-      .run(p.id, p.name, p.client, p.color, p.archived ? 1 : 0);
+            color = excluded.color, archived = excluded.archived, address = excluded.address,
+            contact = excluded.contact, phone = excluded.phone, access = excluded.access, budget_min = excluded.budget_min,
+            offer_area = excluded.offer_area, offer_unit_price = excluded.offer_unit_price, offer_sum = excluded.offer_sum,
+            done_area = excluded.done_area, progress_pct = excluded.progress_pct`)
+      .run(p.id, p.name, p.client, p.color, p.archived ? 1 : 0, p.address || '', p.contact || '', p.phone || '',
+        p.access || '', n(p.budgetMin), n(p.offerArea), n(p.offerUnitPrice), n(p.offerSum), n(p.doneArea), n(p.progressPct));
   }
-  projectInUse(id) { return !!this.s('SELECT 1 FROM entries WHERE project_id = ? LIMIT 1').get(id); }
+  projectInUse(id) {
+    return !!this.s('SELECT 1 FROM entries WHERE project_id = ? LIMIT 1').get(id)
+      || !!this.s('SELECT 1 FROM materials WHERE project_id = ? LIMIT 1').get(id);
+  }
+  /** Alle Zeiten auf Baustellen, mit Namen (für Auswertungen) */
+  projectEntries(projectId) {
+    const sql = `SELECT e.*, u.name AS user_name FROM entries e JOIN users u ON u.id = e.user_id
+                 WHERE ${projectId ? 'e.project_id = ?' : 'e.project_id IS NOT NULL'} ORDER BY e.start_at DESC`;
+    const st = this.s(sql);
+    return (projectId ? st.all(projectId) : st.all())
+      .map((r) => ({ userId: r.user_id, userName: r.user_name, ...Repo.entry(r) }));
+  }
   deleteProject(id) { this.s('DELETE FROM projects WHERE id = ?').run(id); }
 
   // ------------------------------------------------------------- Einträge
@@ -259,6 +359,9 @@ class Repo {
   }
   entries(userId) {
     return this.s('SELECT * FROM entries WHERE user_id = ? ORDER BY start_at').all(userId).map(Repo.entry);
+  }
+  runningEntries() {
+    return this.s('SELECT * FROM entries WHERE end_at IS NULL').all().map((r) => ({ userId: r.user_id, ...Repo.entry(r) }));
   }
   entry(id) {
     const r = this.s('SELECT * FROM entries WHERE id = ?').get(id);
@@ -342,6 +445,73 @@ class Repo {
         t.doneAt == null ? null : t.doneAt, t.doneBy || null, t.doneNote || '', t.createdAt, t.createdBy || null);
   }
   deleteTask(id) { this.s('DELETE FROM tasks WHERE id = ?').run(id); }
+  tasksOfProject(projectId) {
+    return this.s('SELECT * FROM tasks WHERE project_id = ? ORDER BY day DESC, created_at DESC LIMIT 300').all(projectId).map(Repo.task);
+  }
+  openTasksByProject() {
+    const out = {};
+    for (const r of this.s('SELECT project_id, COUNT(*) AS n FROM tasks WHERE done_at IS NULL AND project_id IS NOT NULL GROUP BY project_id').all()) out[r.project_id] = r.n;
+    return out;
+  }
+  absencesBetween(from, to) {
+    return this.s('SELECT * FROM absences WHERE from_day <= ? AND to_day >= ? ORDER BY from_day').all(to, from)
+      .map((r) => ({ userId: r.user_id, ...Repo.absence(r) }));
+  }
+
+  // ------------------------------------------------------------- Material
+  static material(r) {
+    return {
+      id: r.id, projectId: r.project_id, userId: r.user_id, day: r.day, item: r.item,
+      quantity: r.quantity, unit: r.unit, price: r.price == null ? null : r.price, note: r.note, createdAt: r.created_at,
+    };
+  }
+  material(id) {
+    const r = this.s('SELECT * FROM materials WHERE id = ?').get(id);
+    return r ? Repo.material(r) : null;
+  }
+  insertMaterial(m) {
+    this.s(`INSERT INTO materials (id, project_id, user_id, day, item, quantity, unit, price, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(m.id, m.projectId, m.userId, m.day, m.item, m.quantity, m.unit, m.price == null ? null : m.price, m.note, m.createdAt);
+  }
+  deleteMaterial(id) { this.s('DELETE FROM materials WHERE id = ?').run(id); }
+  materials({ projectId, userId, from, to }) {
+    const where = [];
+    const args = [];
+    if (projectId) { where.push('m.project_id = ?'); args.push(projectId); }
+    if (userId) { where.push('m.user_id = ?'); args.push(userId); }
+    if (from) { where.push('m.day >= ?'); args.push(from); }
+    if (to) { where.push('m.day <= ?'); args.push(to); }
+    return this.s(`SELECT m.*, u.name AS user_name FROM materials m LEFT JOIN users u ON u.id = m.user_id
+                   ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.day DESC, m.created_at DESC LIMIT 2000`)
+      .all(...args).map((r) => ({ ...Repo.material(r), userName: r.user_name || '' }));
+  }
+  /** zuletzt verwendete Materialbezeichnungen, für Vorschläge */
+  materialItems() {
+    return this.s(`SELECT item, unit, MAX(created_at) AS t,
+                   (SELECT price FROM materials m2 WHERE m2.item = m.item AND m2.unit = m.unit AND m2.price IS NOT NULL
+                    ORDER BY m2.created_at DESC LIMIT 1) AS price
+                   FROM materials m GROUP BY item, unit ORDER BY t DESC LIMIT 60`).all()
+      .map((r) => ({ item: r.item, unit: r.unit, price: r.price == null ? null : r.price }));
+  }
+
+  // ----------------------------------------------------------- Push-Abos
+  subscriptionsOf(userId) {
+    return this.s('SELECT * FROM push_subscriptions WHERE user_id = ?').all(userId)
+      .map((r) => ({ endpoint: r.endpoint, userId: r.user_id, p256dh: r.p256dh, auth: r.auth, origin: r.origin }));
+  }
+  saveSubscription(sub) {
+    this.s(`INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth, origin, created_at) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh,
+            auth = excluded.auth, origin = excluded.origin`)
+      .run(sub.endpoint, sub.userId, sub.p256dh, sub.auth, sub.origin, sub.createdAt);
+  }
+  deleteSubscription(endpoint, userId) {
+    if (userId) this.s('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').run(endpoint, userId);
+    else this.s('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  }
+  pushLogged(key) { return !!this.s('SELECT 1 FROM push_log WHERE key = ?').get(key); }
+  logPush(key, t) { this.s('INSERT OR IGNORE INTO push_log (key, at) VALUES (?, ?)').run(key, t); }
 
   /** Konsistente Kopie der Datenbank (für Backups) */
   backupTo(file) {
@@ -349,4 +519,4 @@ class Repo {
   }
 }
 
-module.exports = { openDb };
+module.exports = { openDb, SCHEMA_V1 };

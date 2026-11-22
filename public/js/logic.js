@@ -117,6 +117,32 @@
     return null;
   }
 
+  /** Deutsche Zahl: "1.080", "9,50 €", "120,5 m²" -> Zahl, ungültig -> null */
+  function parseDecimal(str) {
+    if (str == null) return null;
+    let s = String(str).trim().replace(/\s|€|m²|qm/gi, '');
+    if (!s) return null;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+    else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    return parseFloat(s);
+  }
+  /** Eurobetrag -> Cent */
+  function parseMoney(str) {
+    const v = parseDecimal(str);
+    return v == null ? null : Math.round(v * 100);
+  }
+  /** Cent -> "1.080 €" bzw. "9,50 €" */
+  function fmtEUR(cents) {
+    if (cents == null) return '';
+    const v = Math.round(cents) / 100;
+    const frac = Math.round(cents) % 100 !== 0;
+    return v.toLocaleString('de-DE', { minimumFractionDigits: frac ? 2 : 0, maximumFractionDigits: 2 }) + ' €';
+  }
+  function fmtNum(n) {
+    return n == null ? '' : Number(n).toLocaleString('de-DE', { maximumFractionDigits: 2 });
+  }
+
   // ------------------------------------------------------------------
   // Feiertage
   // ------------------------------------------------------------------
@@ -473,7 +499,7 @@
           run.end = b.start;
           if (run.end <= run.start) state.entries.splice(state.entries.indexOf(run), 1);
           newEntry(state.activeProjectId);
-          return { message: 'Pause beendet, weiter mit dem neuen Projekt' };
+          return { message: 'Pause beendet, weiter auf der neuen Baustelle' };
         }
         b.end = t;
         return { message: `Pause beendet nach ${Math.max(1, Math.round((t - b.start) / MIN))} Min.` };
@@ -482,13 +508,13 @@
         const pid = op.projectId || null;
         state.activeProjectId = pid;
         if (!run || (run.projectId || null) === pid) return {};
-        if (isOnBreak(run)) return { message: 'Nach der Pause geht es mit dem neuen Projekt weiter' };
+        if (isOnBreak(run)) return { message: 'Nach der Pause geht es auf der neuen Baustelle weiter' };
         if (t - run.start < 2 * MIN) run.projectId = pid; // gerade erst gestartet: nur umbuchen
         else {
           run.end = Math.max(run.start, t);
           newEntry(pid);
         }
-        return { message: `Projekt gewechselt um ${timeOfDay(t)}` };
+        return { message: `Baustelle gewechselt um ${timeOfDay(t)}` };
       }
       case 'note': {
         if (!run) return { error: 'Du bist nicht eingestempelt.' };
@@ -498,6 +524,61 @@
       default:
         return { error: 'Unbekannte Aktion.' };
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Baustelle: Angebot gegen Ist
+  // ------------------------------------------------------------------
+  const LEVEL_RANK = { ok: 1, warn: 2, forecast: 3, over: 4 };
+
+  /** Angebotssumme in Cent: direkt angegeben oder Fläche × Preis je m² */
+  function offerSum(p) {
+    if (p.offerSum != null) return p.offerSum;
+    if (p.offerArea != null && p.offerUnitPrice != null) return Math.round(p.offerArea * p.offerUnitPrice);
+    return null;
+  }
+
+  /** Fertigstellung 0..1 aus erledigten m² oder Prozent, sonst null */
+  function projectProgress(p) {
+    if (p.offerArea > 0 && p.doneArea != null) return Math.min(1, Math.max(0, p.doneArea / p.offerArea));
+    if (p.progressPct != null) return Math.min(1, Math.max(0, p.progressPct / 100));
+    return null;
+  }
+
+  /**
+   * Vergleicht eine Baustelle mit ihrem Angebot.
+   * a = { workedMin, materialCost (Cent), hourlyRate (Cent je Std. oder null) }
+   * level: ok | warn (≥ 80 % verbraucht) | forecast (Hochrechnung > 5 % drüber) | over (Angebot überschritten)
+   */
+  function projectStatus(p, a) {
+    const progress = projectProgress(p);
+    const sum = offerSum(p);
+    const materialCost = a.materialCost || 0;
+    const laborCost = a.hourlyRate != null ? Math.round((a.workedMin / 60) * a.hourlyRate) : null;
+    const cost = laborCost != null ? laborCost + materialCost : null;
+    const judge = (used, budget) => {
+      if (!(budget > 0)) return null;
+      const forecast = progress != null && progress >= 0.1 ? used / progress : null;
+      return { used, budget, ratio: used / budget, forecast, forecastRatio: forecast != null ? forecast / budget : null };
+    };
+    const hours = judge(a.workedMin, p.budgetMin);
+    const money = cost != null ? judge(cost, sum) : null;
+    let level = null;
+    let overPct = 0;
+    for (const j of [hours, money]) {
+      if (!j) continue;
+      let l = 'ok';
+      if (j.ratio >= 0.8) l = 'warn';
+      if (j.forecastRatio != null && j.forecastRatio > 1.05) l = 'forecast';
+      if (j.ratio >= 1) l = 'over';
+      const worst = Math.max(j.ratio, j.forecastRatio != null ? j.forecastRatio : 0);
+      overPct = Math.max(overPct, Math.round((worst - 1) * 100));
+      if (!level || LEVEL_RANK[l] > LEVEL_RANK[level]) level = l;
+    }
+    return {
+      workedMin: a.workedMin, laborCost, materialCost, cost, offerSum: sum, progress,
+      hours, money, level, overPct: Math.max(0, overPct),
+    };
   }
 
   function overlaps(a, b, now) {
@@ -527,7 +608,7 @@
 
   function entriesCSV(ctx, from, to, projectId) {
     const pmap = new Map(ctx.projects.map((p) => [p.id, p]));
-    const rows = [['Datum', 'Wochentag', 'Beginn', 'Ende', 'Pause (Min.)', 'Dauer (h:mm)', 'Dauer (Std.)', 'Projekt', 'Kunde', 'Notiz', 'Nachgetragen']];
+    const rows = [['Datum', 'Wochentag', 'Beginn', 'Ende', 'Pause (Min.)', 'Dauer (h:mm)', 'Dauer (Std.)', 'Baustelle', 'Kunde', 'Notiz', 'Nachgetragen']];
     let sum = 0;
     for (const k of daysBetween(from, to)) {
       for (const e of ctx.idx.byDay.get(k) || []) {
@@ -629,6 +710,16 @@
         client: str(p.client).trim(),
         color: /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : COLORS[projects.length % COLORS.length],
         archived: !!p.archived,
+        address: str(p.address),
+        contact: str(p.contact),
+        phone: str(p.phone),
+        access: str(p.access),
+        budgetMin: Number.isFinite(p.budgetMin) && p.budgetMin > 0 ? Math.round(p.budgetMin) : null,
+        offerArea: Number.isFinite(p.offerArea) && p.offerArea > 0 ? p.offerArea : null,
+        offerUnitPrice: Number.isFinite(p.offerUnitPrice) && p.offerUnitPrice > 0 ? Math.round(p.offerUnitPrice) : null,
+        offerSum: Number.isFinite(p.offerSum) && p.offerSum > 0 ? Math.round(p.offerSum) : null,
+        doneArea: Number.isFinite(p.doneArea) && p.doneArea >= 0 ? p.doneArea : null,
+        progressPct: Number.isFinite(p.progressPct) ? Math.max(0, Math.min(100, Math.round(p.progressPct))) : null,
       });
     }
 
@@ -701,6 +792,7 @@
     easterSunday, holidays, holidayOn, requiredBreakMin, autoBreakMin,
     entryMs, entryNetMin, isOnBreak, runningEntry, presenceStart, buildIndex, absenceOn, makeContext,
     targetFor, daySummary, rangeSummary, balanceUntil, vacation, eta, applyStamp, overlaps, findOverlap,
+    parseDecimal, parseMoney, fmtEUR, fmtNum, offerSum, projectProgress, projectStatus,
     csvCell, csvText, toCSV, entriesCSV, daysCSV, absenceLabel,
     uid, defaultState, normalizeState,
   };
