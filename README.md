@@ -10,7 +10,10 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 
 - Kommen, Pause, Gehen mit einem Tipp. Es zählt die Uhrzeit des Servers, nicht die des Handys.
 - Ohne Netz stempeln (Baustelle, Keller): Die Stempelung wird auf dem Handy gespeichert und automatisch übertragen.
-- Projekt wählen, Notiz zur laufenden Zeit
+- Baustelle wählen, Notiz zur laufenden Zeit
+- Baustelle auf „Heute“: Adresse mit „Route“ (Apple Karten oder Google Maps), Ansprechpartner mit „Anrufen“, Hinweise zu Schlüssel und Parken
+- Material eintragen: was, wie viel, Einheit, Preis wenn bekannt. Bekanntes Material wird vorgeschlagen.
+- Erinnerung aufs Handy, wenn man abends vergessen hat auszustempeln (iPhone: nur aus der App auf dem Home-Bildschirm)
 - Aufgaben vom Büro auf „Heute“ sehen und abhaken, auf Wunsch mit Notiz. Die Aufgaben für morgen stehen darunter.
 - Zeiten nachtragen, Urlaub, Krankheit und Gleittage eintragen (wenn das Büro das erlaubt)
 - Zeitkonto, Wochenstand, voraussichtlicher Feierabend, Resturlaub
@@ -19,7 +22,10 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 
 ### Für das Büro (Admin)
 
-- Team-Übersicht: wer ist da, seit wann, auf welchem Projekt, Zeitkonto und erledigte Aufgaben je Person
+- Team-Übersicht: wer ist da, seit wann, auf welcher Baustelle, Zeitkonto und erledigte Aufgaben je Person. Vergessenes Ausstempeln ist rot markiert.
+- Baustellen mit Adresse, Kontakt, Zugang und Angebot: in Stunden, als Fläche × Preis je m² oder als Angebotssumme
+- Auswertung je Baustelle: Stunden je Mitarbeiter, Kosten (Stunden × Stundensatz + Material), Fortschritt in m² oder Prozent, Hochrechnung bis zum Ende. Mitteilung ans Büro bei 80 %, bei absehbarer Überschreitung und beim Überschreiten. Dazu ein fertiger Text, um den Kunden zu informieren (WhatsApp, E-Mail, Teilen).
+- Wochenplan: wer ist wann wo, mit Urlaub und Krankheit. Ein Tipp auf Person und Tag legt die Aufgabe an.
 - Aufgaben planen: was zu tun ist, mit Details (Farbe, Material, Schlüssel …), Baustelle, Tag und für wen. Offene Aufgaben wandern automatisch in den nächsten Tag. Export als CSV.
 - Mitarbeiter anlegen und per Link einladen (WhatsApp, E-Mail, Teilen). Der Link setzt auch vergessene Passwörter zurück.
 - Sollzeit pro Wochentag, Urlaubstage, Startdatum und Übertrag je Person
@@ -27,7 +33,7 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 - Änderungsprotokoll: wer hat wann was nachgetragen, geändert oder gelöscht, und welche Stempelungen ohne Netz kamen
 - Monatsexport als CSV: eine Übersicht pro Person (Ist, Soll, Saldo, Zeitkonto, Urlaub, Krank) und alle Einträge
 - Arbeitszeitnachweis pro Person zum Ausdrucken mit Unterschriftszeilen
-- Projekte, Firmeneinstellungen, Backup
+- Firmeneinstellungen (Stundensatz, Erinnerungszeit), Backup
 
 ### Rechnet automatisch
 
@@ -119,7 +125,8 @@ Dann <http://localhost:3000> öffnen. Der Einrichtungscode steht in der Ausgabe.
 1. **Einrichten:** Adresse öffnen, Einrichtungscode, Firmenname, Bundesland und den eigenen Admin-Zugang eingeben.
 2. **Mitarbeiter anlegen:** Team → „Mitarbeiter anlegen“. Name, Wochenstunden, Arbeitstage, Urlaubstage und das Datum eintragen, ab dem das Zeitkonto zählt.
 3. **Einladen:** Den Link per WhatsApp, E-Mail oder „Teilen“ aufs Handy schicken. Er gilt 7 Tage und nur einmal.
-4. **Optional:** Unter Einstellungen Projekte anlegen und festlegen, ob Mitarbeiter selbst nachtragen dürfen.
+4. **Baustellen:** Unter Baustellen anlegen, mit Adresse und Angebot. Unter Einstellungen → Firma den Stundensatz eintragen, dann vergleicht die App auch Angebote in Euro.
+5. **Erinnerungen:** Unter Einstellungen → Erinnerungen einschalten, dann kommen die Warnungen zu den Baustellen aufs Handy. Die Mitarbeiter schalten dort die Erinnerung ans Ausstempeln ein.
 
 Wechselt jemand von einer anderen Zeiterfassung, trägst du unter Team → Person → Vertrag den bisherigen Stand als Übertrag ein (z. B. `+12:30`).
 
@@ -135,10 +142,10 @@ Wechselt jemand von einer anderen Zeiterfassung, trägst du unter Team → Perso
 
 - **Lohnabrechnung:** Team → Monatsexport → „Übersicht als CSV“. Öffnet sich direkt in Excel oder LibreOffice (Semikolon, deutsches Dezimalkomma).
 - **Nachweis zum Unterschreiben:** Team → Person → Bericht → „Drucken oder PDF“.
-- **Abrechnung nach Projekt:** Im Bericht unter „Inhalt“ ein Projekt wählen, dann drucken oder als CSV laden.
+- **Abrechnung nach Baustelle:** Baustellen → Baustelle → „Als CSV“, mit allen Zeiten, dem Material und dem Vergleich zum Angebot. Oder im Bericht einer Person unter „Inhalt“ eine Baustelle wählen.
 - **Erledigte Aufgaben:** Aufgaben → „Aufgaben im … als CSV“, mit Tag, Baustelle, wer es erledigt hat, wann und mit welcher Notiz.
 
-Im Büro stehen unten die Bereiche Heute, Aufgaben, Team und Einstellungen. Die eigenen Einträge und Berichte findest du unter Team bei deinem Namen.
+Im Büro stehen unten die Bereiche Heute, Aufgaben, Baustellen, Team und Einstellungen. Die eigenen Einträge und Berichte findest du unter Team bei deinem Namen.
 
 ## Datensicherung
 
@@ -161,9 +168,11 @@ Hinweise zur Orientierung, keine Rechtsberatung:
 
 - Arbeitgeber in Deutschland müssen die Arbeitszeit ihrer Beschäftigten erfassen (Bundesarbeitsgericht, Beschluss vom 13.09.2022). Diese App liefert die Aufzeichnung, die Verantwortung bleibt beim Betrieb.
 - Gibt es einen Betriebsrat, hat er bei der Einführung mitzubestimmen (§ 87 Abs. 1 Nr. 6 BetrVG).
-- Gespeichert werden Name, Benutzername, Arbeitszeiten, Projekte, Notizen und Abwesenheiten (bei Krankheit nur „krank“, keine Diagnose). Informiere die Mitarbeiter darüber und nimm die Verarbeitung in dein Verzeichnis der Verarbeitungstätigkeiten auf.
+- Gespeichert werden Name, Benutzername, Arbeitszeiten, Baustellen, Material, Notizen und Abwesenheiten (bei Krankheit nur „krank“, keine Diagnose). Informiere die Mitarbeiter darüber und nimm die Verarbeitung in dein Verzeichnis der Verarbeitungstätigkeiten auf.
 - Aufzeichnungen nach § 16 Abs. 2 ArbZG sind mindestens zwei Jahre aufzubewahren. Deaktivierte Zugänge behalten deshalb ihre Daten, gelöscht wird nichts automatisch.
-- Die App lädt nichts von fremden Servern (keine Google Fonts, kein Tracking). Passwörter werden mit scrypt gespeichert, Anmeldungen sind gegen Durchprobieren gebremst.
+- Die App lädt nichts von fremden Servern (keine Google Fonts, kein Tracking). Für Mitteilungen aufs Handy geht eine verschlüsselte Nachricht über den Mitteilungsdienst von Apple, Google oder Mozilla. Der Inhalt ist für diese Dienste nicht lesbar.
+- Angebotszahlen und Stundensatz sehen nur Admins.
+- Wird ein Kostenanschlag wesentlich überschritten, muss der Kunde unverzüglich informiert werden (§ 649 BGB). Die Warnungen und der Text unter „Kunden informieren“ helfen dabei. Passwörter werden mit scrypt gespeichert, Anmeldungen sind gegen Durchprobieren gebremst.
 
 ## Entwicklung
 
@@ -179,10 +188,11 @@ public/            Oberfläche (läuft im Browser)
                    (dieselbe Datei nutzt auch der Server)
   js/api.js        Verbindung zum Server
   js/app.js        Ansichten und Bedienung
-  sw.js            Offline-Start der App
+  sw.js            Offline-Start der App, Mitteilungen
 server/
-  server.js        HTTP-Server, Anmeldung, Rechte, API
+  server.js        HTTP-Server, Anmeldung, Rechte, API, Erinnerungen
   db.js            Datenbank (SQLite)
+  push.js          Web-Push (VAPID, RFC 8291) ohne Zusatzpakete
   backup.js        Backup über die Kommandozeile
 tests/             Tests für Rechenkern und Server
 ```
@@ -191,6 +201,8 @@ tests/             Tests für Rechenkern und Server
 
 - Urlaubsanträge mit Genehmigung: Mitarbeiter tragen Abwesenheiten direkt ein, das Büro sieht jede Änderung im Protokoll und kann das Selbsteintragen abschalten.
 - Mehrere Firmen oder Standorte in einer Installation
-- Fotos zu Aufgaben (vorher/nachher)
+- Fotos zu Aufgaben und Baustellen (vorher/nachher)
+- Anbindung an Malistor: Baustellen und Angebote werden von Hand eingetragen
+- Material ohne Netz eintragen: braucht Verbindung
 - Aufgaben ohne Netz abhaken: Die Liste ist offline sichtbar, das Abhaken braucht Verbindung.
 - Feiertage, die nur in einzelnen Gemeinden gelten: als „Sonderurlaub / bezahlt frei“ eintragen

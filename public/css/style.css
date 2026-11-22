@@ -15,6 +15,8 @@
   --stempel-hell: #e3e0f3;
   --signal: #b3262c;
   --signal-hell: #f5e2e0;
+  --ocker: #8a5a00;
+  --ocker-hell: #f4e8cf;
   --on-stempel: #ffffff;
 
   --din: "DIN Alternate", "DIN 1451", Bahnschrift, "DIN Next", "Roboto Condensed", sans-serif-condensed, "Arial Narrow", sans-serif;
@@ -34,6 +36,8 @@
     --stempel-hell: #322d55;
     --signal: #ff8a80;
     --signal-hell: #3d2426;
+    --ocker: #e7b65c;
+    --ocker-hell: #3a301c;
     --on-stempel: #17142e;
   }
 }
@@ -581,6 +585,7 @@ small { font-size: 0.8125rem; }
 }
 input[type=text],
 input[type=password],
+input[type=tel],
 input[type=number],
 input[type=date],
 input[type=time],
@@ -954,3 +959,166 @@ a.btn { text-decoration: none; }
   }
   .signatures div { border-top: 1px solid #000; padding-top: 0.25rem; font-size: 8.5pt; }
 }
+
+/* ---------------------------------------------------------- Baustellen */
+/* Baustellen-Zettel auf „Heute“: Farbkante der Baustelle links */
+.site {
+  background: var(--papier);
+  border: 1px solid var(--linie);
+  border-left: 0.375rem solid var(--c, var(--stempel));
+  border-radius: 3px;
+  padding: 1rem 1rem 0.75rem;
+  margin-bottom: 1.75rem;
+}
+.site .timecard-head h2 { display: flex; align-items: baseline; gap: 0.5rem; margin: 0; }
+.site-addr { white-space: pre-line; margin: 0.75rem 0 0.5rem; font-weight: 600; }
+.site-access { margin: 0.5rem 0 0; font-size: 0.9375rem; white-space: pre-line; }
+.site .actions { margin-top: 0.5rem; }
+.actions--site { margin-top: 0.75rem; }
+.btn small { font-weight: 400; color: var(--graphit-2); margin-left: 0.25rem; }
+
+.mat-list { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+.mat-list > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px dashed var(--linie);
+}
+.mat-list small { display: block; color: var(--graphit-2); font-size: 0.875rem; }
+.mat-list .num { white-space: nowrap; }
+.report-sec details { margin-top: 0.75rem; }
+.report-sec summary { cursor: pointer; font-weight: 600; color: var(--stempel); }
+
+.alert {
+  border: 1px solid var(--signal);
+  background: var(--signal-hell);
+  border-radius: 3px;
+  padding: 0.75rem 1rem;
+  margin: 0 0 1.25rem;
+}
+.alert p { margin: 0 0 0.5rem; }
+.alert p:last-child { margin-bottom: 0; }
+
+.sites { list-style: none; margin: 0; padding: 0; }
+.sites > li { border-top: 1px solid var(--linie); }
+.sites > li:last-child { border-bottom: 1px solid var(--linie); }
+.site-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  align-items: start;
+  padding: 0.875rem 0;
+  color: inherit;
+  text-decoration: none;
+}
+.site-row > .dot { margin-top: 0.375rem; }
+.site-row .who b { font-weight: 600; }
+.site-row small { display: block; color: var(--graphit-2); }
+.site-row small.on-site { color: var(--stempel); font-weight: 600; }
+.site-row .figs { text-align: right; }
+.site-row .figs > .num { font-size: 1.125rem; font-weight: 700; }
+.site-row .budget { grid-column: 2 / -1; }
+
+.budget { margin: 0.5rem 0 0; }
+.budget small { display: block; margin-top: 0.25rem; font-size: 0.875rem; color: var(--graphit-2); }
+.budget--warn .bar i { background: var(--ocker); }
+.budget--warn small { color: var(--ocker); }
+.budget--forecast .bar i,
+.budget--over .bar i { background: var(--signal); }
+.budget--forecast small,
+.budget--over small { color: var(--signal); font-weight: 600; }
+
+.progress-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem 0.75rem;
+  margin-top: 1rem;
+}
+.progress-form .field { flex: 1 1 10rem; margin: 0; }
+.progress-form .form-error { flex-basis: 100%; }
+
+fieldset.offer {
+  border: 1px solid var(--linie);
+  border-radius: 3px;
+  padding: 0.75rem 0.875rem 0.25rem;
+  margin: 0.75rem 0 1rem;
+}
+fieldset.offer legend { padding: 0 0.25rem; font-weight: 600; }
+.field--short { max-width: 14rem; }
+
+.pname--link {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.375rem;
+  padding: 0.125rem 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--stempel);
+  text-align: left;
+  cursor: pointer;
+}
+.pname--link small { flex-basis: 100%; color: var(--graphit-2); padding-left: 1rem; }
+
+/* ---------------------------------------------------------- Wochenplan */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--graphit);
+  border-radius: 3px;
+  margin: 0 0 1rem;
+  overflow: hidden;
+}
+.seg button {
+  min-width: 5rem;
+  padding: 0.5rem 1rem;
+  border: 0;
+  background: none;
+  font: 700 0.9375rem/1.2 var(--din);
+  color: var(--graphit);
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--graphit); }
+.seg button[aria-pressed="true"] { background: var(--graphit); color: var(--papier); }
+
+.plan-day { margin: 0 0 1.25rem; }
+.plan-day h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  padding-bottom: 0.25rem;
+  border-bottom: 2px solid var(--graphit);
+  font: 700 1rem/1.3 var(--din);
+}
+.plan-day h2 .link-btn { padding: 0; font: inherit; color: inherit; }
+.plan-day--today h2 { border-color: var(--stempel); }
+.plan-day--today h2 .link-btn { color: var(--stempel); }
+.plan-all { margin: 0.5rem 0 0; font-size: 0.875rem; color: var(--graphit-2); }
+.plan-list { list-style: none; margin: 0; padding: 0; }
+.plan-list > li { border-bottom: 1px dashed var(--linie); }
+.plan-row {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 7.5rem) minmax(0, 1fr);
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-row b { font-weight: 600; overflow-wrap: anywhere; }
+.plan-row > span { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; }
+.chip { display: inline-flex; align-items: baseline; gap: 0.3rem; font-size: 0.875rem; }
+.chip--done { color: var(--graphit-2); text-decoration: line-through; }
+
+input:disabled,
+select:disabled,
+textarea:disabled { opacity: 0.55; }

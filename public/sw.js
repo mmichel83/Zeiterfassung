@@ -4,7 +4,7 @@
  * Daten (/api/...) gehen immer direkt an den Server.
  */
 'use strict';
-const CACHE = 'zeiterfassung-v2';
+const CACHE = 'zeiterfassung-v3';
 const SHELL = [
   './',
   'index.html',
@@ -48,5 +48,37 @@ self.addEventListener('fetch', (ev) => {
     } catch (_) { /* offline */ }
     const cached = await cache.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' && await cache.match('index.html'));
     return cached || network;
+  })());
+});
+
+// Mitteilungen vom Server (Erinnerung ans Ausstempeln, Warnungen zur Baustelle)
+self.addEventListener('push', (ev) => {
+  let data = {};
+  try {
+    data = ev.data ? ev.data.json() : {};
+  } catch (_) {
+    data = { body: ev.data ? ev.data.text() : '' };
+  }
+  ev.waitUntil(self.registration.showNotification(data.title || 'Zeiterfassung', {
+    body: data.body || '',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: data.tag || undefined,
+    data: { url: data.url || './#heute' },
+  }));
+});
+
+self.addEventListener('notificationclick', (ev) => {
+  ev.notification.close();
+  const url = new URL((ev.notification.data && ev.notification.data.url) || './', self.registration.scope).href;
+  ev.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) {
+      if ('focus' in w) {
+        try { await w.navigate(url); } catch (_) { /* fremde Seite */ }
+        return w.focus();
+      }
+    }
+    return self.clients.openWindow(url);
   })());
 });
