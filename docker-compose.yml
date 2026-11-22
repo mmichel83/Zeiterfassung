@@ -1,0 +1,28 @@
+# Start:  DOMAIN in .env eintragen, dann  docker compose up -d
+# Caddy holt das HTTPS-Zertifikat automatisch (Ports 80 und 443 müssen frei sein).
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      PUBLIC_URL: https://${DOMAIN}
+      TRUST_PROXY: "1"
+      SETUP_CODE: ${SETUP_CODE:-}
+    volumes:
+      - zeitdaten:/app/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    command: caddy reverse-proxy --from ${DOMAIN} --to app:3000
+    volumes:
+      - caddy_data:/data
+    depends_on:
+      - app
+
+volumes:
+  zeitdaten:
+  caddy_data:

@@ -1,0 +1,877 @@
+/*
+ * Zeiterfassung – Gestaltung
+ * Idee: die Stempelkarte. Karton als Grund, violette Stempelfarbe für
+ * gestempelte Zeiten, Signalrot nur für Minusstunden und Hinweise.
+ * Ziffern in DIN (Bahnschrift unter Windows, DIN Alternate auf Apple-Geräten),
+ * ohne nachgeladene Webfonts.
+ */
+:root {
+  --karton: #e9ece4;
+  --papier: #f8f9f5;
+  --graphit: #23272b;
+  --graphit-2: #5b625c;
+  --linie: #c9cfc4;
+  --stempel: #4b3fa0;
+  --stempel-hell: #e3e0f3;
+  --signal: #b3262c;
+  --signal-hell: #f5e2e0;
+  --on-stempel: #ffffff;
+
+  --din: "DIN Alternate", "DIN 1451", Bahnschrift, "DIN Next", "Roboto Condensed", sans-serif-condensed, "Arial Narrow", sans-serif;
+  --text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --nav-h: 4.25rem;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --karton: #1b1f24;
+    --papier: #242a31;
+    --graphit: #e6e8e3;
+    --graphit-2: #a1a8a0;
+    --linie: #3a424b;
+    --stempel: #a99df3;
+    --stempel-hell: #322d55;
+    --signal: #ff8a80;
+    --signal-hell: #3d2426;
+    --on-stempel: #17142e;
+  }
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--karton);
+  color: var(--graphit);
+  font: 1rem/1.5 var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: max(1.25rem, env(safe-area-inset-top)) 1rem calc(var(--nav-h) + 2rem + env(safe-area-inset-bottom));
+  outline: none;
+}
+
+h1, h2 {
+  font-family: var(--din);
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 0;
+}
+h1 { font-size: 1.75rem; letter-spacing: -0.005em; }
+h2 { font-size: 1.125rem; }
+
+a { color: var(--stempel); }
+
+.num {
+  font-family: var(--din);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.neg { color: var(--signal); }
+.muted { color: var(--graphit-2); }
+small { font-size: 0.8125rem; }
+
+:focus-visible {
+  outline: 2px solid var(--stempel);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ Kopf */
+.page-head { margin-bottom: 1.25rem; }
+.page-head .sub { margin: 0.25rem 0 0; color: var(--graphit-2); }
+.page-head--nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.month-nav { display: flex; align-items: center; gap: 0.25rem; }
+.month-label {
+  font-family: var(--din);
+  font-weight: 700;
+  min-width: 8.5rem;
+  text-align: center;
+}
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid var(--linie);
+  border-radius: 50%;
+  background: var(--papier);
+  color: var(--graphit);
+  cursor: pointer;
+}
+.icon-btn svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ------------------------------------------------------------ Stempeluhr */
+.clock { margin-bottom: 1.75rem; }
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--graphit-2);
+}
+.status i {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  border: 2px solid var(--graphit-2);
+}
+.clock--work .status { color: var(--stempel); }
+.clock--work .status i { background: var(--stempel); border-color: var(--stempel); }
+.clock--break .status i { border-color: var(--stempel); }
+
+.timer {
+  margin: 0.25rem 0 0;
+  font-size: clamp(3.75rem, 19vw, 6rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.clock--break .timer,
+.clock--off .timer { color: var(--graphit-2); }
+
+.timer-sub {
+  margin: 0.5rem 0 1.25rem;
+  max-width: 34rem;
+}
+
+.punch {
+  display: block;
+  width: 100%;
+  min-height: 4rem;
+  border: 0;
+  border-radius: 6px;
+  font: 700 1.5rem/1 var(--din);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.punch--in { background: var(--stempel); color: var(--on-stempel); }
+.punch--out { background: var(--graphit); color: var(--karton); }
+.punch--pause {
+  background: transparent;
+  color: var(--graphit);
+  border: 2px solid var(--graphit);
+}
+.punch:active { transform: translateY(1px); }
+.punch-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+.field--project { margin-bottom: 0.875rem; }
+.field--note { margin: 0.875rem 0 0; }
+
+/* -------------------------------------------------------- Stempelkarte */
+.timecard {
+  position: relative;
+  background: var(--papier);
+  border: 1px solid var(--linie);
+  border-radius: 3px;
+  padding: 1.5rem 1rem 0.75rem;
+  margin-bottom: 1.75rem;
+  /* Einsteckkerbe wie bei einer echten Stempelkarte */
+  -webkit-mask: radial-gradient(circle 0.6rem at 50% 0, transparent 98%, #000 100%);
+  mask: radial-gradient(circle 0.6rem at 50% 0, transparent 98%, #000 100%);
+}
+.timecard-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--graphit);
+}
+.timecard-head .num { color: var(--graphit-2); }
+
+.stamp-cols,
+.stamp-row {
+  display: grid;
+  grid-template-columns: 4.25rem 4.25rem minmax(0, 1fr) auto;
+  gap: 0 0.5rem;
+  align-items: baseline;
+}
+.stamp-cols {
+  padding: 0.375rem 0;
+  font-size: 0.8125rem;
+  color: var(--graphit-2);
+  border-bottom: 1px solid var(--linie);
+}
+.stamp-cols span:last-child { text-align: right; }
+
+.stamps { list-style: none; margin: 0; padding: 0; }
+.stamps > li { border-bottom: 1px solid var(--linie); }
+.stamp-row {
+  width: 100%;
+  padding: 0.625rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stamp-row .t {
+  display: inline-block;
+  font: 700 1.25rem/1.2 var(--din);
+  font-variant-numeric: tabular-nums;
+  color: var(--stempel);
+}
+.stamp-row .t.running {
+  font: 0.875rem/1.6 var(--text);
+  color: var(--graphit-2);
+}
+.what { min-width: 0; }
+.what small { display: block; color: var(--graphit-2); overflow-wrap: anywhere; }
+.pname { display: inline-flex; align-items: baseline; gap: 0.375rem; }
+.dur { font-weight: 700; text-align: right; }
+
+.stamp-row--compact { grid-template-columns: 7.5rem minmax(0, 1fr) auto; }
+.stamp-row--compact .t { font-size: 1.0625rem; }
+.stamp-row--compact .t.running { font-size: 0.8125rem; }
+.times { white-space: nowrap; }
+.dash { color: var(--graphit-2); padding: 0 0.125rem; }
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  background: var(--c, var(--graphit-2));
+}
+
+.timecard-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0 0.25rem;
+  border-top: 2px solid var(--graphit);
+  margin-top: -1px;
+  color: var(--graphit-2);
+}
+.timecard-foot .num { color: var(--graphit); font-weight: 700; font-size: 1.125rem; }
+
+.timecard .link-btn { margin-top: 0.5rem; }
+
+@keyframes stempeln {
+  0% { transform: scale(1.7) rotate(-6deg); opacity: 0; }
+  55% { transform: scale(0.92) rotate(-1deg); opacity: 1; }
+  100% { transform: none; }
+}
+.stamp-new { animation: stempeln 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .stamp-new { animation: none; }
+}
+
+.empty { color: var(--graphit-2); margin: 1rem 0; }
+
+/* ---------------------------------------------------------- Überblick */
+.ledger .row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--linie);
+}
+.ledger .row:last-child { border-bottom: 1px solid var(--linie); }
+.ledger .row > .num,
+.ledger .row > span > .num { font-size: 1.125rem; font-weight: 700; }
+.ledger .row small { flex-basis: 100%; color: var(--graphit-2); }
+
+.bar {
+  flex-basis: 100%;
+  height: 0.375rem;
+  background: var(--linie);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar i { display: block; height: 100%; background: var(--stempel); border-radius: 3px; }
+
+.hint {
+  border-left: 3px solid var(--stempel);
+  padding: 0.25rem 0 0.25rem 0.875rem;
+  margin: 0 0 1.5rem;
+}
+.hint p { margin: 0 0 0.375rem; }
+.hint a { margin-right: 1rem; }
+
+.warnings {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  color: var(--signal);
+  font-size: 0.875rem;
+}
+.warnings li {
+  padding: 0.375rem 0.625rem;
+  background: var(--signal-hell);
+  border-left: 3px solid var(--signal);
+  margin-bottom: 0.25rem;
+}
+
+/* ------------------------------------------------------------ Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--graphit);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--graphit);
+  font: 600 0.9375rem/1.2 var(--text);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.btn--primary { background: var(--stempel); border-color: var(--stempel); color: var(--on-stempel); }
+.btn--danger { border-color: var(--signal); color: var(--signal); }
+.btn--danger[type=submit] { background: var(--signal); color: var(--papier); }
+.btn--quiet { border-color: transparent; }
+.btn--del { color: var(--signal); padding-left: 0; }
+.btn--wide { width: 100%; }
+
+.link-btn {
+  padding: 0.5rem 0;
+  border: 0;
+  background: none;
+  color: var(--stempel);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+/* ----------------------------------------------------------- Einträge */
+.summary { margin: 0 0 1rem; color: var(--graphit-2); }
+.summary .num { color: var(--graphit); font-weight: 700; }
+
+.days { list-style: none; margin: 0; padding: 0; }
+.day {
+  padding: 0.75rem 0 0.5rem;
+  border-top: 1px solid var(--linie);
+}
+.day-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+}
+.day-date { font-family: var(--din); font-weight: 700; font-size: 1.0625rem; }
+.day-date small { font-family: var(--text); font-weight: 600; color: var(--stempel); margin-left: 0.25rem; }
+.badges { display: inline-flex; flex-wrap: wrap; gap: 0.375rem; }
+.day-figs { margin-left: auto; display: inline-flex; gap: 0.625rem; }
+.day--off { padding: 0.375rem 0; }
+.day--off .day-date { color: var(--graphit-2); font-weight: 400; }
+.day--today .day-date { color: var(--stempel); }
+.stamps--compact { margin-top: 0.25rem; }
+.stamps--compact > li { border-bottom: 0; border-top: 1px dashed var(--linie); }
+.stamps--compact .stamp-row { padding: 0.5rem 0; }
+.missing { margin: 0.25rem 0 0; color: var(--signal); font-size: 0.9375rem; }
+.missing .link-btn { padding: 0 0 0 0.25rem; }
+
+.badge {
+  display: inline-block;
+  padding: 0.0625rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font: 600 0.75rem/1.5 var(--text);
+  background: none;
+}
+.badge--holiday { color: var(--graphit-2); }
+.badge--absence { color: var(--stempel); cursor: pointer; }
+
+/* ------------------------------------------------------------- Bericht */
+.totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0;
+  margin: 0 0 1.25rem;
+  border-top: 2px solid var(--graphit);
+}
+.totals > div { padding: 0.625rem 0.75rem 0.75rem 0; border-bottom: 1px solid var(--linie); }
+.totals dt { color: var(--graphit-2); font-size: 0.875rem; }
+.totals dd { margin: 0; font: 700 1.5rem/1.2 var(--din); font-variant-numeric: tabular-nums; }
+
+.report-sec { margin: 1.75rem 0 0; }
+.report-sec h2 { margin-bottom: 0.625rem; }
+
+.proj-bars { list-style: none; margin: 0; padding: 0; }
+.proj-bars li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding: 0.5rem 0;
+}
+.proj-bars .pname { flex: 1; min-width: 0; }
+.proj-bars small { color: var(--graphit-2); }
+.proj-bars .pct { color: var(--graphit-2); min-width: 3rem; text-align: right; }
+
+.table-wrap { overflow-x: auto; margin: 0 -1rem; padding: 0 1rem; }
+.report {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.report th,
+.report td {
+  padding: 0.375rem 0.375rem;
+  border-bottom: 1px solid var(--linie);
+  text-align: left;
+  vertical-align: top;
+}
+.report th:first-child,
+.report td:first-child { padding-left: 0; }
+.report thead th { font-weight: 600; color: var(--graphit-2); border-bottom: 2px solid var(--graphit); }
+.report .num { text-align: right; }
+.report td small { display: block; color: var(--graphit-2); font-size: 0.75rem; }
+.report tr.off td { color: var(--graphit-2); }
+.report tfoot th,
+.report tfoot td { font-weight: 700; border-top: 2px solid var(--graphit); border-bottom: 0; }
+.report .note-cell { min-width: 8rem; overflow-wrap: anywhere; }
+
+.note { color: var(--graphit-2); font-size: 0.875rem; }
+.ok { color: var(--graphit-2); }
+
+.print-head,
+.signatures { display: none; }
+
+/* ------------------------------------------------------------ Projekte */
+.projects { list-style: none; margin: 0; padding: 0; }
+.projects > li { border-top: 1px solid var(--linie); }
+.projects > li:last-child { border-bottom: 1px solid var(--linie); }
+.proj-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  width: 100%;
+  padding: 0.875rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.proj-row .dot { width: 0.875rem; height: 0.875rem; }
+.proj-row .pname { display: block; font-weight: 600; }
+.proj-row small { display: block; color: var(--graphit-2); font-weight: 400; font-family: var(--text); }
+.proj-row .num { text-align: right; font-size: 1.125rem; font-weight: 700; }
+.archived { margin-top: 1.5rem; }
+.archived summary { cursor: pointer; color: var(--graphit-2); padding: 0.5rem 0; }
+
+/* ------------------------------------------------------ Formularfelder */
+.field { display: block; margin-bottom: 0.875rem; }
+.field > span,
+.week-grid span {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--graphit-2);
+  margin-bottom: 0.25rem;
+}
+input[type=text],
+input[type=password],
+input[type=number],
+input[type=date],
+input[type=time],
+input:not([type]),
+select {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--linie);
+  border-radius: 6px;
+  background: var(--papier);
+  color: var(--graphit);
+  font: 1rem/1.3 var(--text);
+}
+dialog input,
+dialog select { background: var(--karton); }
+select { appearance: auto; }
+
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.field-row--3 { grid-template-columns: 1fr 1fr 1fr; }
+.field-row .field { min-width: 0; }
+.field--short { max-width: 12rem; }
+
+.check {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.625rem;
+  align-items: start;
+  margin-bottom: 0.875rem;
+  cursor: pointer;
+}
+.check input { width: 1.25rem; height: 1.25rem; margin: 0.125rem 0 0; accent-color: var(--stempel); }
+.check small { display: block; color: var(--graphit-2); }
+
+.help { color: var(--graphit-2); font-size: 0.875rem; margin: 0 0 0.875rem; }
+.form-error {
+  color: var(--signal);
+  background: var(--signal-hell);
+  border-left: 3px solid var(--signal);
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.875rem;
+}
+
+.settings fieldset {
+  border: 0;
+  border-top: 2px solid var(--graphit);
+  margin: 0 0 1.5rem;
+  padding: 0.75rem 0 0;
+}
+.settings legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 0.75rem;
+  font: 700 1.125rem/1.2 var(--din);
+}
+.settings legend + * { clear: both; }
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.375rem;
+  margin-bottom: 0.5rem;
+}
+.week-grid input { padding: 0.5rem 0.25rem; text-align: center; font-family: var(--din); font-variant-numeric: tabular-nums; }
+.week-grid span { text-align: center; }
+.settings details { margin-bottom: 0.5rem; }
+.settings summary { cursor: pointer; color: var(--stempel); padding: 0.25rem 0; }
+.holiday-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+.holiday-list li { padding: 0.25rem 0; border-bottom: 1px solid var(--linie); }
+.holiday-list .num { display: inline-block; min-width: 5.5rem; }
+
+.backup { margin-top: 2.5rem; padding-top: 0.75rem; border-top: 2px solid var(--graphit); }
+.backup p { max-width: 34rem; }
+.about { margin-top: 2rem; color: var(--graphit-2); font-size: 0.875rem; }
+
+.swatches { border: 0; margin: 0 0 0.875rem; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.swatches legend { font-size: 0.875rem; color: var(--graphit-2); margin-bottom: 0.375rem; padding: 0; }
+.swatch {
+  position: relative;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 6px;
+  background: var(--c);
+  cursor: pointer;
+}
+.swatch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.swatch:has(input:checked) { box-shadow: 0 0 0 2px var(--papier), 0 0 0 4px var(--graphit); }
+.swatch:has(input:focus-visible) { outline: 2px solid var(--stempel); outline-offset: 4px; }
+
+/* -------------------------------------------------------------- Dialog */
+dialog {
+  width: min(32rem, calc(100vw - 1.5rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--papier);
+  color: var(--graphit);
+  overflow: auto;
+}
+dialog::backdrop { background: rgb(20 22 26 / 0.5); }
+dialog form { padding: 1.25rem 1.125rem 1rem; }
+dialog h2 { font-size: 1.375rem; margin-bottom: 1rem; }
+.dlg-actions { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+.dlg-actions .spacer { flex: 1; }
+dialog[open] { animation: aufklappen 0.18s ease-out; }
+@keyframes aufklappen { from { opacity: 0; transform: translateY(0.5rem); } }
+@media (prefers-reduced-motion: reduce) { dialog[open] { animation: none; } }
+
+/* --------------------------------------------------------------- Toast */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--nav-h) + 0.75rem + env(safe-area-inset-bottom));
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: var(--graphit);
+  color: var(--karton);
+  transform: translate(-50%, 1rem);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+#toast button {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--stempel-hell);
+  font: 700 0.9375rem var(--text);
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0.25rem 0;
+}
+
+/* ---------------------------------------------------------- Navigation */
+.tabs {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 10;
+  background: var(--papier);
+  border-top: 1px solid var(--linie);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabs-inner {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  max-width: 40rem;
+  margin: 0 auto;
+}
+.tabs a {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  height: var(--nav-h);
+  color: var(--graphit-2);
+  text-decoration: none;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.tabs svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.tabs a[aria-current] { color: var(--stempel); }
+.tabs a[aria-current]::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 25%;
+  right: 25%;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--stempel);
+}
+
+.noscript { padding: 2rem 1rem; text-align: center; }
+
+/* ----------------------------------------------- Anmelden, Einrichten */
+body:not(.app) .tabs { display: none; }
+body:not(.app) main { padding-bottom: 3rem; }
+.auth { max-width: 26rem; margin: 8vh auto 0; }
+.auth h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+.auth .sub { color: var(--graphit-2); margin: 0 0 1.5rem; }
+.auth form { margin-bottom: 1.25rem; }
+.auth .note { border-left: 3px solid var(--stempel); padding-left: 0.75rem; color: var(--graphit); }
+
+.offline-banner {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--stempel-hell);
+  border-left: 3px solid var(--stempel);
+  font-size: 0.9375rem;
+}
+
+/* ---------------------------------------------------------------- Team */
+.team { list-style: none; margin: 0; padding: 0; }
+.team > li { border-top: 1px solid var(--linie); }
+.team > li:last-child { border-bottom: 1px solid var(--linie); }
+.member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.875rem 0;
+  color: inherit;
+  text-decoration: none;
+}
+.member .who b { font-weight: 600; }
+.member small { display: block; color: var(--graphit-2); }
+.member small.neg { color: var(--signal); }
+.member .figs { text-align: right; }
+.member .figs > .num { font-size: 1.125rem; font-weight: 700; }
+.role {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--linie);
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: var(--graphit-2);
+}
+.presence {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: 0.375rem;
+  border-radius: 50%;
+  border: 2px solid var(--linie);
+}
+.presence--work { background: var(--stempel); border-color: var(--stempel); }
+.presence--break { border-color: var(--stempel); }
+
+.back {
+  display: inline-block;
+  margin-bottom: 0.375rem;
+  padding: 0.25rem 0;
+  font-weight: 600;
+  text-decoration: none;
+}
+.back::before { content: "‹ "; }
+
+.subnav {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0 -1rem 1.25rem;
+  padding: 0 1rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--linie);
+  scrollbar-width: none;
+}
+.subnav a {
+  flex: none;
+  padding: 0.625rem 0.75rem;
+  color: var(--graphit-2);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+}
+.subnav a[aria-current] { color: var(--stempel); border-bottom-color: var(--stempel); }
+.page-head--sub { margin-bottom: 0.75rem; justify-content: flex-end; }
+
+.audit { list-style: none; margin: 0; padding: 0; }
+.audit li {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.625rem 0;
+  border-top: 1px solid var(--linie);
+}
+.audit .when { color: var(--graphit-2); }
+.audit .what small { display: block; color: var(--graphit-2); }
+@media (max-width: 26rem) {
+  .audit li { grid-template-columns: 1fr; gap: 0.125rem; }
+}
+
+.manual { font-style: italic; }
+
+/* ------------------------------------------------------ Einstellungen */
+.settings-sec { margin-bottom: 2rem; }
+.settings-sec > h2 {
+  padding-top: 0.75rem;
+  border-top: 2px solid var(--graphit);
+  margin-bottom: 0.75rem;
+}
+.facts { margin: 0 0 0.75rem; }
+.facts > div {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid var(--linie);
+}
+.facts dt { color: var(--graphit-2); }
+.facts dd { margin: 0; }
+code { font-size: 0.875em; padding: 0 0.25rem; background: var(--stempel-hell); border-radius: 3px; }
+
+.days-pick { border: 0; padding: 0; margin: 0 0 0.875rem; display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.days-pick legend { font-size: 0.875rem; color: var(--graphit-2); margin-bottom: 0.375rem; padding: 0; }
+.days-pick label { position: relative; cursor: pointer; }
+.days-pick input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.days-pick span {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.5rem;
+  border: 1px solid var(--linie);
+  border-radius: 6px;
+  font-family: var(--din);
+  font-weight: 700;
+  color: var(--graphit-2);
+}
+.days-pick input:checked + span { background: var(--stempel); border-color: var(--stempel); color: var(--on-stempel); }
+.days-pick input:focus-visible + span { outline: 2px solid var(--stempel); outline-offset: 2px; }
+
+.btn:disabled,
+.punch:disabled { opacity: 0.55; cursor: progress; }
+a.btn { text-decoration: none; }
+
+@media (min-width: 40rem) {
+  main { padding-top: 2.5rem; }
+  h1 { font-size: 2.125rem; }
+  .tabs a { flex-direction: row; gap: 0.5rem; font-size: 0.8125rem; }
+}
+@media (max-width: 30rem) {
+  .report { font-size: 0.8125rem; }
+  .report th,
+  .report td { padding: 0.375rem 0.1875rem; }
+  .report thead th { font-size: 0.75rem; }
+  .report td small { font-size: 0.6875rem; }
+}
+@media (max-width: 22rem) {
+  .stamp-cols, .stamp-row { grid-template-columns: 3.75rem 3.75rem minmax(0, 1fr) auto; }
+  .field-row--3 { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---------------------------------------------------------------- Druck */
+@media print {
+  :root {
+    --karton: #fff; --papier: #fff; --graphit: #000; --graphit-2: #444;
+    --linie: #bbb; --stempel: #000; --signal: #000; --signal-hell: #fff;
+  }
+  @page { size: A4; margin: 14mm 14mm 16mm; }
+  body { font-size: 10pt; }
+  main { max-width: none; padding: 0; }
+  .tabs, #toast, dialog, .no-print, .actions, .offline-banner, .subnav { display: none !important; }
+  .print-head { display: block; margin-bottom: 1rem; }
+  .print-head h1 { font-size: 18pt; }
+  .print-head p { margin: 0.25rem 0 0; }
+  .table-wrap { overflow: visible; margin: 0; padding: 0; }
+  .report { font-size: 9pt; }
+  .report tr { break-inside: avoid; }
+  .totals dd { font-size: 14pt; }
+  .warnings li { background: none; padding: 0.125rem 0 0.125rem 0.5rem; }
+  .signatures {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 3rem;
+    break-inside: avoid;
+  }
+  .signatures div { border-top: 1px solid #000; padding-top: 0.25rem; font-size: 8.5pt; }
+}

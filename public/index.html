@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Zeiterfassung</title>
+  <meta name="description" content="Arbeitszeit vom Handy stempeln, Zeitkonto und Urlaub im Blick, Monatsberichte fürs Büro.">
+  <meta name="theme-color" content="#e9ece4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1f24" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Zeiterfassung">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="view" tabindex="-1"><p class="empty">Lädt …</p></main>
+  <nav class="tabs" aria-label="Bereiche"><div class="tabs-inner"></div></nav>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="dlg" aria-labelledby="dlg-title"></dialog>
+
+  <noscript>
+    <p class="noscript">Die Zeiterfassung braucht JavaScript. Bitte aktiviere es in deinem Browser.</p>
+  </noscript>
+
+  <script src="js/logic.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
