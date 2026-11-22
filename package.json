@@ -1,0 +1,15 @@
+{
+  "name": "zeiterfassung",
+  "version": "1.0.0",
+  "description": "Zeiterfassung für kleine Firmen: Mitarbeiter stempeln vom Handy, das Büro sieht alle Zeiten.",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "server/server.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.js\""
+  }
+}
