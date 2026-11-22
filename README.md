@@ -11,6 +11,7 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 - Kommen, Pause, Gehen mit einem Tipp. Es zählt die Uhrzeit des Servers, nicht die des Handys.
 - Ohne Netz stempeln (Baustelle, Keller): Die Stempelung wird auf dem Handy gespeichert und automatisch übertragen.
 - Projekt wählen, Notiz zur laufenden Zeit
+- Aufgaben vom Büro auf „Heute“ sehen und abhaken, auf Wunsch mit Notiz. Die Aufgaben für morgen stehen darunter.
 - Zeiten nachtragen, Urlaub, Krankheit und Gleittage eintragen (wenn das Büro das erlaubt)
 - Zeitkonto, Wochenstand, voraussichtlicher Feierabend, Resturlaub
 - Eigener Monatsbericht als PDF oder CSV
@@ -18,7 +19,8 @@ Läuft auf dem eigenen Server, ohne externe Dienste und ohne npm-Pakete. Alle Da
 
 ### Für das Büro (Admin)
 
-- Team-Übersicht: wer ist da, seit wann, auf welchem Projekt, Zeitkonto je Person
+- Team-Übersicht: wer ist da, seit wann, auf welchem Projekt, Zeitkonto und erledigte Aufgaben je Person
+- Aufgaben planen: was zu tun ist, mit Details (Farbe, Material, Schlüssel …), Baustelle, Tag und für wen. Offene Aufgaben wandern automatisch in den nächsten Tag. Export als CSV.
 - Mitarbeiter anlegen und per Link einladen (WhatsApp, E-Mail, Teilen). Der Link setzt auch vergessene Passwörter zurück.
 - Sollzeit pro Wochentag, Urlaubstage, Startdatum und Übertrag je Person
 - Zeiten aller Mitarbeiter ansehen und korrigieren
@@ -134,6 +136,9 @@ Wechselt jemand von einer anderen Zeiterfassung, trägst du unter Team → Perso
 - **Lohnabrechnung:** Team → Monatsexport → „Übersicht als CSV“. Öffnet sich direkt in Excel oder LibreOffice (Semikolon, deutsches Dezimalkomma).
 - **Nachweis zum Unterschreiben:** Team → Person → Bericht → „Drucken oder PDF“.
 - **Abrechnung nach Projekt:** Im Bericht unter „Inhalt“ ein Projekt wählen, dann drucken oder als CSV laden.
+- **Erledigte Aufgaben:** Aufgaben → „Aufgaben im … als CSV“, mit Tag, Baustelle, wer es erledigt hat, wann und mit welcher Notiz.
+
+Im Büro stehen unten die Bereiche Heute, Aufgaben, Team und Einstellungen. Die eigenen Einträge und Berichte findest du unter Team bei deinem Namen.
 
 ## Datensicherung
 
@@ -186,4 +191,6 @@ tests/             Tests für Rechenkern und Server
 
 - Urlaubsanträge mit Genehmigung: Mitarbeiter tragen Abwesenheiten direkt ein, das Büro sieht jede Änderung im Protokoll und kann das Selbsteintragen abschalten.
 - Mehrere Firmen oder Standorte in einer Installation
+- Fotos zu Aufgaben (vorher/nachher)
+- Aufgaben ohne Netz abhaken: Die Liste ist offline sichtbar, das Abhaken braucht Verbindung.
 - Feiertage, die nur in einzelnen Gemeinden gelten: als „Sonderurlaub / bezahlt frei“ eintragen

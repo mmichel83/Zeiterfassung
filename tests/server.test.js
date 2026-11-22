@@ -8,12 +8,25 @@ const ZE = require('../public/js/logic.js');
 
 const at = (day, hhmm) => ZE.combine(day, hhmm);
 
+const open = new Set();
+// Server auch dann schließen, wenn ein Test scheitert (sonst hängt der Testlauf)
+test.afterEach(() => {
+  for (const close of open) close();
+  open.clear();
+});
+
 async function start(opts = {}) {
   const clock = { t: at('2026-11-16', '07:00') };
   const app = createApp({ setupCode: 'ABCD-EFGH', now: () => clock.t, ...opts });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
-  return { app, base, clock, close: () => new Promise((r) => app.server.close(r)) };
+  const close = () => new Promise((r) => {
+    open.delete(close);
+    app.server.close(r);
+    app.server.closeAllConnections();
+  });
+  open.add(close);
+  return { app, base, clock, close };
 }
 
 function client(base) {
@@ -209,4 +222,93 @@ test('Exporte und Backup', async () => {
   assert.equal(bk.status, 200);
   assert.equal(bk.data.subarray(0, 15).toString(), 'SQLite format 3');
   await s.close();
+});
+
+test('Aufgaben: anlegen, sichtbar nur für Zugewiesene, abhaken, Übertrag, Export', async () => {
+  const s = await start();
+  const admin = await setupCompany(s);
+  const anna = await addEmployee(s, admin, 'Anna', 'anna');
+  const ben = await addEmployee(s, admin, 'Ben', 'ben');
+  s.clock.t = at('2026-11-16', '07:00');
+
+  // Mitarbeiter dürfen keine Aufgaben anlegen
+  assert.equal((await anna.emp('POST', '/api/tasks', { title: 'X', day: '2026-11-16' })).status, 403);
+  assert.equal((await admin('POST', '/api/tasks', { title: '', day: '2026-11-16' })).status, 422);
+
+  const r1 = await admin('POST', '/api/tasks', {
+    title: 'Fassade grundieren', details: 'Farbe: Sto Weiß\nGerüst steht', day: '2026-11-16', assignees: [anna.id],
+  });
+  assert.equal(r1.status, 200, JSON.stringify(r1.data));
+  assert.equal(r1.data.task.details, 'Farbe: Sto Weiß\nGerüst steht');
+  await admin('POST', '/api/tasks', { title: 'Baustelle aufräumen', day: '2026-11-16', assignees: [] });
+  await admin('POST', '/api/tasks', { title: 'Flur spachteln', day: '2026-11-17', assignees: [ben.id] });
+
+  let a = await anna.emp('GET', '/api/tasks?from=2026-11-16&to=2026-11-17');
+  assert.deepEqual(a.data.tasks.map((x) => x.title), ['Fassade grundieren', 'Baustelle aufräumen']);
+  let b = await ben.emp('GET', '/api/tasks?from=2026-11-16&to=2026-11-17');
+  assert.deepEqual(b.data.tasks.map((x) => x.title).sort(), ['Baustelle aufräumen', 'Flur spachteln']);
+  assert.equal((await admin('GET', '/api/tasks?from=2026-11-16&to=2026-11-17')).data.tasks.length, 3);
+  assert.equal((await admin('GET', '/api/tasks?from=2026-11-16&to=2026-11-17&mine=1')).data.tasks.length, 1);
+
+  // Ben darf Annas Aufgabe nicht abhaken
+  const t1 = r1.data.task.id;
+  assert.equal((await ben.emp('POST', `/api/tasks/${t1}/done`, { note: 'x' })).status, 404);
+
+  s.clock.t = at('2026-11-16', '14:20');
+  const done = await anna.emp('POST', `/api/tasks/${t1}/done`, { note: 'zwei Anstriche' });
+  assert.equal(done.data.task.doneByName, 'Anna');
+  assert.equal(done.data.task.doneNote, 'zwei Anstriche');
+  assert.equal((await anna.emp('POST', `/api/tasks/${t1}/done`, {})).status, 409);
+
+  // Offene Aufgaben wandern in den nächsten Tag, erledigte nicht
+  s.clock.t = at('2026-11-17', '07:00');
+  a = await anna.emp('GET', '/api/tasks?from=2026-11-17&to=2026-11-17');
+  assert.deepEqual(a.data.tasks.map((x) => x.title), ['Baustelle aufräumen']);
+
+  // Zähler in der Team-Übersicht
+  const team = (await admin('GET', '/api/team')).data.users;
+  const annaRow = team.find((u) => u.id === anna.id);
+  assert.equal(annaRow.tasksOpen, 1);
+
+  // Wieder öffnen: nur wer es erledigt hat oder das Büro
+  const all = (await admin('GET', '/api/tasks?from=2026-11-16&to=2026-11-16')).data.tasks;
+  const common = all.find((x) => x.title === 'Baustelle aufräumen').id;
+  await ben.emp('POST', `/api/tasks/${common}/done`, {});
+  assert.equal((await anna.emp('POST', `/api/tasks/${common}/reopen`, {})).status, 403);
+  assert.equal((await ben.emp('POST', `/api/tasks/${common}/reopen`, {})).data.task.doneAt, null);
+
+  // Bearbeiten und löschen nur durchs Büro
+  assert.equal((await anna.emp('PUT', `/api/tasks/${t1}`, { title: 'Y' })).status, 403);
+  const moved = await admin('PUT', `/api/tasks/${t1}`, { day: '2026-11-18' });
+  assert.equal(moved.data.task.day, '2026-11-18');
+  assert.equal(moved.data.task.title, 'Fassade grundieren');
+
+  const csv = await admin('GET', '/api/export/tasks.csv?month=2026-11');
+  assert.equal(csv.status, 200);
+  assert.match(csv.data, /Mi;18\.11\.2026;Fassade grundieren;Farbe: Sto Weiß \/ Gerüst steht;;;Anna;ja;Anna;16\.11\.2026 14:20;zwei Anstriche/);
+  assert.equal((await admin('DELETE', `/api/tasks/${t1}`)).status, 200);
+  // am 18.11. bleiben nur die beiden offenen Aufgaben vom 16. und 17.
+  const left = (await admin('GET', `/api/tasks?from=2026-11-18&to=2026-11-18`)).data.tasks;
+  assert.deepEqual(left.map((x) => x.title), ['Baustelle aufräumen', 'Flur spachteln']);
+  await s.close();
+});
+
+test('Datenbank von Version 1 wird ohne Datenverlust erweitert', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const os = require('node:os');
+  const path = require('node:path');
+  const fs = require('node:fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ze-mig-'));
+  const file = path.join(dir, 'z.db');
+  const { openDb } = require('../server/db.js');
+  const repo = openDb(file);
+  repo.insertUser({ id: 'u1', name: 'Alt', username: 'alt', role: 'admin', settings: {} });
+  repo.db.exec('DROP TABLE tasks; PRAGMA user_version = 1');
+  repo.close();
+  const again = openDb(file);
+  assert.equal(again.db.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(again.user('u1').name, 'Alt');
+  assert.deepEqual(again.tasksInRange('2026-01-01', '2026-12-31'), []);
+  again.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

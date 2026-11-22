@@ -23,10 +23,11 @@
     heute: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/>',
     eintraege: '<rect x="5" y="3.5" width="14" height="17" rx="1"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>',
     bericht: '<path d="M4 20h16"/><path d="M7 17v-5M12 17V7M17 17v-8"/>',
+    aufgaben: '<rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/>',
     team: '<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M16.5 14c2.2 0 3.7 1.4 4.1 4"/>',
     einstellungen: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   };
-  const TAB_LABELS = { heute: 'Heute', eintraege: 'Einträge', bericht: 'Bericht', team: 'Team', einstellungen: 'Einstellungen' };
+  const TAB_LABELS = { heute: 'Heute', aufgaben: 'Aufgaben', eintraege: 'Einträge', bericht: 'Bericht', team: 'Team', einstellungen: 'Einstellungen' };
 
   let session = null; // { user, company }
   let serverMe = null; // eigener Stand laut Server
@@ -54,6 +55,9 @@
     teamNow: 0,
     audit: null,
     installPrompt: null,
+    myTasks: null,
+    adminTasks: null,
+    tasksDay: Z.dateKey(Date.now()),
   };
 
   // ------------------------------------------------------------------
@@ -428,6 +432,8 @@
         ${note}
       </section>
 
+      ${tasksSection()}
+
       <section class="timecard" aria-labelledby="tc-h">
         <div class="timecard-head"><h2 id="tc-h">Stempelkarte</h2><span class="num">${Z.fmtDate(k)}</span></div>
         <div class="stamp-cols" aria-hidden="true"><span>Kommen</span><span>Gehen</span><span>Projekt</span><span>Dauer</span></div>
@@ -694,6 +700,7 @@
       <i class="presence presence--${u.status}" aria-hidden="true"></i>
       <span class="who"><b>${esc(u.name)}</b>${u.role === 'admin' ? ' <span class="role">Admin</span>' : ''}
         <small>${esc(memberStatus(u))}${p ? ', ' + esc(p.name) : ''}</small>
+        ${u.tasksOpen + u.tasksDone ? `<small>Aufgaben heute: ${u.tasksDone} von ${u.tasksOpen + u.tasksDone} erledigt</small>` : ''}
         ${u.warnings ? `<small class="neg">${u.warnings} ${u.warnings === 1 ? 'Hinweis' : 'Hinweise'} zum Arbeitszeitgesetz</small>` : ''}</span>
       <span class="figs"><span class="num">${hm(u.todayMin)}</span><small>Konto ${bal(u.balanceMin)}</small></span>
     </a></li>`;
@@ -825,6 +832,228 @@
   }
 
   // ------------------------------------------------------------------
+  // Aufgaben: Büro plant, Mitarbeiter haken ab
+  // ------------------------------------------------------------------
+  const CHEV_LEFT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"/></svg>';
+  const CHEV_RIGHT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 6l6 6-6 6"/></svg>';
+
+  function nameOf(id) {
+    if (session && id === session.user.id) return session.user.name;
+    const u = (ui.team || []).find((x) => x.id === id);
+    return u ? u.name : '';
+  }
+  function taskProject(t) {
+    return t.projectId ? me.projects.find((p) => p.id === t.projectId) || null : null;
+  }
+  function doneText(t) {
+    const when = Z.dateKey(t.doneAt) === t.day ? `um ${Z.timeOfDay(t.doneAt)}` : `am ${shortDate(Z.dateKey(t.doneAt))} um ${Z.timeOfDay(t.doneAt)}`;
+    const who = t.doneBy && t.doneBy !== session.user.id ? ` von ${t.doneByName}` : '';
+    return `Erledigt${who} ${when}${t.doneNote ? ': ' + t.doneNote : ''}`;
+  }
+  function updateTask(task) {
+    for (const list of [ui.myTasks, ui.adminTasks]) {
+      if (!list) continue;
+      const i = list.findIndex((x) => x.id === task.id);
+      if (i >= 0) list[i] = task;
+    }
+  }
+
+  /** Aufgaben-Block auf „Heute“ */
+  function tasksSection() {
+    if (!ui.myTasks) return '';
+    const k = todayKey();
+    const tomorrow = Z.addDays(k, 1);
+    const today = ui.myTasks.filter((t) => t.day <= k && (t.doneAt == null || t.day === k || Z.dateKey(t.doneAt) === k));
+    const next = ui.myTasks.filter((t) => t.day === tomorrow);
+    if (!today.length && !next.length) return '';
+    const open = today.filter((t) => t.doneAt == null).length;
+    return `<section class="tasks" aria-labelledby="tk-h">
+      <div class="timecard-head"><h2 id="tk-h">Aufgaben</h2><span class="${open ? '' : 'muted'}">${open ? `${open} offen` : 'alles erledigt'}</span></div>
+      ${today.length ? `<ul class="task-list">${today.map((t) => taskRow(t)).join('')}</ul>` : '<p class="empty">Für heute ist nichts eingetragen.</p>'}
+      ${next.length ? `<details class="tomorrow"><summary>Morgen: ${next.length} ${next.length === 1 ? 'Aufgabe' : 'Aufgaben'}</summary>
+        <ul class="task-list">${next.map((t) => taskRow(t, true)).join('')}</ul></details>` : ''}
+    </section>`;
+  }
+
+  function taskRow(t, readonly) {
+    const p = taskProject(t);
+    const done = t.doneAt != null;
+    const late = !done && t.day < todayKey();
+    const check = readonly
+      ? '<span class="task-check" aria-hidden="true"></span>'
+      : `<button type="button" class="task-check" data-act="${done ? 'reopenTask' : 'doneTask'}" data-id="${esc(t.id)}" aria-pressed="${done}" aria-label="${done ? 'Wieder öffnen' : 'Abhaken'}: ${esc(t.title)}"></button>`;
+    return `<li class="task${done ? ' task--done' : ''}">
+      ${check}
+      <div class="task-body">
+        <b>${esc(t.title)}</b>
+        ${p ? `<span class="pname"><i class="dot" style="--c:${esc(p.color)}"></i>${esc(p.name)}</span>` : ''}
+        ${late ? `<small class="neg">offen seit ${esc(shortDate(t.day))}</small>` : ''}
+        ${t.details ? `<p class="task-details">${esc(t.details)}</p>` : ''}
+        ${done ? `<small class="done-text">${esc(doneText(t))}</small>` : ''}
+      </div>
+    </li>`;
+  }
+
+  function adminTaskRow(t) {
+    const p = taskProject(t);
+    const names = t.assignees.length ? t.assignees.map(nameOf).filter(Boolean).join(', ') : 'alle';
+    const done = t.doneAt != null;
+    const late = !done && t.day < ui.tasksDay;
+    return `<li><button type="button" class="admin-task${done ? ' task--done' : ''}" data-act="editTask" data-id="${esc(t.id)}">
+      <span class="task-check" aria-hidden="true"></span>
+      <span class="task-body">
+        <b>${esc(t.title)}</b>
+        <small>${p ? esc(p.name) + ', ' : ''}für ${esc(names)}</small>
+        ${late ? `<small class="neg">offen seit ${esc(shortDate(t.day))}</small>` : ''}
+        ${done ? `<small class="done-text">${esc(doneText(t))}</small>` : ''}
+      </span>
+    </button></li>`;
+  }
+
+  function viewTasks() {
+    const day = ui.tasksDay;
+    const k = todayKey();
+    const rel = { [k]: 'heute', [Z.addDays(k, 1)]: 'morgen', [Z.addDays(k, -1)]: 'gestern' }[day] || '';
+    const label = `${Z.WEEKDAYS_LONG[Z.weekday(day)]}, ${Z.fmtDate(day, false)}`;
+    const month = `${day.slice(0, 7)}`;
+    const head = `
+      <header class="page-head"><h1>Aufgaben</h1></header>
+      <div class="day-nav">
+        <button type="button" class="icon-btn" data-act="taskDay" data-dir="-1" aria-label="Vorheriger Tag">${CHEV_LEFT}</button>
+        <span class="day-label">${esc(label)}${rel ? ` <small>${rel}</small>` : ''}</span>
+        <button type="button" class="icon-btn" data-act="taskDay" data-dir="1" aria-label="Nächster Tag">${CHEV_RIGHT}</button>
+        ${day !== k ? `<button type="button" class="link-btn" data-act="taskDay" data-day="${k}">Heute</button>` : ''}
+      </div>
+      <div class="actions"><button type="button" class="btn btn--primary" data-act="newTask">Aufgabe anlegen</button></div>`;
+    if (!ui.adminTasks) return head + '<p class="empty">Lädt …</p>';
+    const ofDay = ui.adminTasks.filter((t) => t.day === day);
+    const carried = ui.adminTasks.filter((t) => t.day < day && t.doneAt == null);
+    return head + `
+      ${carried.length ? `<section class="report-sec"><h2>Noch offen von früher</h2><ul class="admin-tasks">${carried.map(adminTaskRow).join('')}</ul></section>` : ''}
+      <section class="report-sec">
+        <h2>Geplant</h2>
+        ${ofDay.length ? `<ul class="admin-tasks">${ofDay.map(adminTaskRow).join('')}</ul>`
+          : '<p class="empty">Für diesen Tag ist noch nichts geplant. Leg eine Aufgabe an, dann sehen die Mitarbeiter sie auf „Heute“.</p>'}
+      </section>
+      <section class="report-sec">
+        <h2>Export</h2>
+        <p><a class="btn" href="/api/export/tasks.csv?month=${month}" download>Aufgaben im ${Z.MONTHS[+day.slice(5, 7) - 1]} als CSV</a></p>
+        <p class="help">Mit Tag, Baustelle, wer es erledigt hat, wann und mit welcher Notiz.</p>
+      </section>`;
+  }
+
+  async function loadMyTasks() {
+    if (!session) return;
+    const k = todayKey();
+    try {
+      const r = await call('GET', `/api/tasks?from=${k}&to=${Z.addDays(k, 1)}&mine=1`);
+      ui.myTasks = r.tasks;
+      store.set('ze.tasks', { uid: session.user.id, tasks: r.tasks });
+    } catch (_) {
+      const c = store.get('ze.tasks', null);
+      if (!ui.myTasks && c && session && c.uid === session.user.id) ui.myTasks = c.tasks;
+    }
+  }
+  async function loadAdminTasks() {
+    if (!isAdmin()) return;
+    const day = ui.tasksDay;
+    try {
+      const r = await call('GET', `/api/tasks?from=${day}&to=${day}`);
+      if (ui.tasksDay === day) ui.adminTasks = r.tasks;
+    } catch (err) {
+      if (!err.handled) toast(errText(err));
+      if (!ui.adminTasks) ui.adminTasks = [];
+    }
+  }
+
+  async function reopenTask(id) {
+    await act(async () => {
+      const r = await call('POST', `/api/tasks/${encodeURIComponent(id)}/reopen`, {});
+      updateTask(r.task);
+      return r;
+    }, 'Wieder offen');
+  }
+
+  function openDoneDialog(id) {
+    const t = (ui.myTasks || []).find((x) => x.id === id);
+    if (!t) return;
+    const p = taskProject(t);
+    openDialog({
+      title: 'Aufgabe erledigt?',
+      submit: 'Erledigt',
+      body: `
+        <p class="task-dlg"><b>${esc(t.title)}</b>${p ? `<br><span class="muted">${esc(p.name)}</span>` : ''}</p>
+        <label class="field"><span>Notiz, optional</span>
+          <textarea name="note" rows="3" maxlength="500" placeholder="z. B. zwei Anstriche, Farbe reicht noch für morgen"></textarea></label>`,
+      onSubmit: async (fd) => {
+        try {
+          const r = await call('POST', `/api/tasks/${encodeURIComponent(id)}/done`, { note: fd.get('note') });
+          updateTask(r.task);
+        } catch (err) {
+          if (err.status === 409) loadMyTasks().then(render);
+          throw err;
+        }
+        render();
+        toast('Abgehakt', () => reopenTask(id));
+        return null;
+      },
+    });
+  }
+
+  async function openTaskDialog(id) {
+    const t = id ? (ui.adminTasks || []).find((x) => x.id === id) : null;
+    if (id && !t) return;
+    if (!ui.team) await loadTeam();
+    const people = (ui.team || []).filter((u) => u.active || (t && t.assignees.includes(u.id)));
+    const all = !t || !t.assignees.length;
+    const done = t && t.doneAt != null;
+    openDialog({
+      title: t ? 'Aufgabe bearbeiten' : 'Aufgabe anlegen',
+      submit: t ? 'Speichern' : 'Anlegen',
+      body: `
+        <label class="field"><span>Was ist zu tun?</span>
+          <input type="text" name="title" maxlength="120" value="${esc(t ? t.title : '')}" placeholder="z. B. Wohnzimmer zweiter Anstrich"></label>
+        <label class="field"><span>Details, optional</span>
+          <textarea name="details" rows="3" maxlength="1000" placeholder="Farbe, Material, Ansprechpartner vor Ort …">${esc(t ? t.details : '')}</textarea></label>
+        <div class="field-row">
+          <label class="field"><span>Tag</span><input type="date" name="day" value="${esc(t ? t.day : ui.tasksDay)}"></label>
+          ${me.projects.length ? `<label class="field"><span>Projekt</span><select name="project"><option value="">Ohne Projekt</option>${projectOptions(t ? t.projectId : null)}</select></label>` : ''}
+        </div>
+        <fieldset class="assign"><legend>Für wen?</legend>
+          <label class="check"><input type="checkbox" name="all" data-assign-all ${all ? 'checked' : ''}><span>Alle</span></label>
+          ${people.map((u) => `<label class="check"><input type="checkbox" name="a" value="${esc(u.id)}" data-assign-one ${!all && t.assignees.includes(u.id) ? 'checked' : ''}><span>${esc(u.name)}</span></label>`).join('')}
+        </fieldset>
+        ${t ? `<label class="check"><input type="checkbox" name="done" ${done ? 'checked' : ''}><span>Erledigt${done ? `<small>${esc(doneText(t))}</small>` : ''}</span></label>` : ''}`,
+      onSubmit: async (fd) => {
+        const title = String(fd.get('title') || '').trim();
+        if (!title) return 'Bitte beschreib kurz, was zu tun ist.';
+        const assignees = fd.get('all') === 'on' ? [] : fd.getAll('a').map(String);
+        if (fd.get('all') !== 'on' && !assignees.length) return 'Bitte wähl aus, für wen die Aufgabe ist, oder kreuz „Alle“ an.';
+        const body = {
+          title, details: String(fd.get('details') || ''), day: String(fd.get('day') || ''),
+          projectId: String(fd.get('project') || '') || null, assignees,
+        };
+        const r = t ? await call('PUT', `/api/tasks/${encodeURIComponent(t.id)}`, body) : await call('POST', '/api/tasks', body);
+        if (t && (fd.get('done') === 'on') !== done) {
+          await call('POST', `/api/tasks/${encodeURIComponent(t.id)}/${done ? 'reopen' : 'done'}`, {});
+        }
+        if (!t && body.day !== ui.tasksDay) ui.tasksDay = body.day;
+        await loadAdminTasks();
+        render();
+        toast(t ? 'Aufgabe gespeichert' : `Aufgabe angelegt für ${shortDate(r.task.day)}`);
+        return null;
+      },
+      del: t ? async () => {
+        await call('DELETE', `/api/tasks/${encodeURIComponent(t.id)}`);
+        ui.adminTasks = ui.adminTasks.filter((x) => x.id !== t.id);
+        render();
+        toast('Aufgabe gelöscht');
+        return null;
+      } : null,
+    });
+  }
+
+  // ------------------------------------------------------------------
   // Ansicht: Einstellungen
   // ------------------------------------------------------------------
   function viewSettings() {
@@ -847,7 +1076,7 @@
           <div><dt>Urlaub</dt><dd>${fmtDays(s.vacationDaysPerYear)} Tage pro Jahr</dd></div>
           <div><dt>Feiertage</dt><dd>${c.state ? esc(Z.STATES[c.state]) : 'nur bundesweite'}</dd></div>
         </dl>
-        <p class="help">${admin ? 'Deine eigene Sollzeit und deinen Urlaub änderst du unter Team bei deinem Namen.' : 'Sollzeit und Urlaub legt das Büro fest. Stimmt etwas nicht, sag dort Bescheid.'}</p>
+        <p class="help">${admin ? 'Deine eigenen Einträge, Berichte, Sollzeit und Urlaub findest du unter Team bei deinem Namen.' : 'Sollzeit und Urlaub legt das Büro fest. Stimmt etwas nicht, sag dort Bescheid.'}</p>
       </section>
 
       ${admin ? `
@@ -982,6 +1211,17 @@
     shell(`<h1>${esc(title)}</h1><p class="sub">${esc(text)}</p><p><button type="button" class="btn btn--primary" data-act="reload">Noch einmal versuchen</button></p>`);
   }
 
+  /** Tag und Monate nach der Serveruhr ausrichten (die Handyuhr kann falsch gehen) */
+  function syncDays() {
+    const k = todayKey();
+    const ym = { y: +k.slice(0, 4), m: +k.slice(5, 7) };
+    ui.day = k;
+    ui.tasksDay = k;
+    ui.entriesMonth = { ...ym };
+    ui.reportMonth = { ...ym };
+    ui.teamMonth = { ...ym };
+  }
+
   async function enterApp(s) {
     session = { user: s.user, company: s.company };
     try {
@@ -995,6 +1235,7 @@
         return;
       }
     }
+    syncDays();
     document.body.classList.add('app');
     renderNav();
     if (/^#einladung\//.test(location.hash)) history.replaceState(null, '', '#heute');
@@ -1012,6 +1253,7 @@
       if (err.offline && c && c.session) {
         session = c.session;
         setMe(c.state);
+        syncDays();
         document.body.classList.add('app');
         renderNav();
         return route();
@@ -1438,7 +1680,8 @@
   }
 
   function renderNav() {
-    const tabs = ['heute', 'eintraege', 'bericht'].concat(isAdmin() ? ['team'] : [], ['einstellungen']);
+    // Büro: eigene Einträge und Berichte unter Team beim eigenen Namen
+    const tabs = isAdmin() ? ['heute', 'aufgaben', 'team', 'einstellungen'] : ['heute', 'eintraege', 'bericht', 'einstellungen'];
     $('.tabs-inner').style.gridTemplateColumns = `repeat(${tabs.length}, 1fr)`;
     $('.tabs-inner').innerHTML = tabs.map((t) => `<a href="#${t}" data-view="${t}">
       <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg><span>${TAB_LABELS[t]}</span></a>`).join('');
@@ -1457,6 +1700,7 @@
     ctx = Z.makeContext(state || me, now());
     let html;
     if (ui.view === 'team') html = ui.subjectId ? viewMember() : viewTeam();
+    else if (ui.view === 'aufgaben') html = viewTasks();
     else if (ui.view === 'eintraege') html = viewEntries(false);
     else if (ui.view === 'bericht') html = viewReport(false);
     else if (ui.view === 'einstellungen') html = viewSettings();
@@ -1507,7 +1751,7 @@
     if (!session) return;
     const parts = location.hash.slice(1).split('/');
     let v = parts[0] || 'heute';
-    if (!TAB_LABELS[v] || (v === 'team' && !isAdmin())) v = 'heute';
+    if (!TAB_LABELS[v] || ((v === 'team' || v === 'aufgaben') && !isAdmin())) v = 'heute';
     ui.view = v;
     ui.subjectId = v === 'team' && parts[1] ? decodeURIComponent(parts[1]) : null;
     ui.sub = ui.subjectId ? (['eintraege', 'bericht', 'vertrag', 'protokoll'].includes(parts[2]) ? parts[2] : 'eintraege') : null;
@@ -1518,6 +1762,14 @@
       if (viewingOther()) jobs.push(loadOther());
       if (ui.sub === 'protokoll') jobs.push(loadAudit());
       await Promise.all(jobs);
+      render();
+    }
+    if (v === 'aufgaben') {
+      await Promise.all([loadTeam(), loadAdminTasks()]);
+      render();
+    }
+    if (v === 'heute') {
+      await loadMyTasks();
       render();
     }
   }
@@ -1543,6 +1795,17 @@
     newProject: () => openProjectDialog(null),
     editProject: (el) => openProjectDialog(el.dataset.id),
     newMember: () => openMemberDialog(),
+    newTask: () => openTaskDialog(null),
+    editTask: (el) => openTaskDialog(el.dataset.id),
+    doneTask: (el) => openDoneDialog(el.dataset.id),
+    reopenTask: (el) => reopenTask(el.dataset.id),
+    taskDay: async (el) => {
+      ui.tasksDay = el.dataset.day || Z.addDays(ui.tasksDay, Number(el.dataset.dir));
+      ui.adminTasks = null;
+      render();
+      await loadAdminTasks();
+      render();
+    },
     refreshTeam: async () => {
       await loadTeam();
       render();
@@ -1630,6 +1893,15 @@
   document.addEventListener('change', (ev) => {
     const el = ev.target.closest('[data-change]');
     if (el && changes[el.dataset.change]) changes[el.dataset.change](el);
+    // „Alle“ und einzelne Personen schließen sich gegenseitig aus
+    const form = ev.target.form;
+    if (form && ev.target.checked && ev.target.matches('[data-assign-all]')) {
+      $$('[data-assign-one]', form).forEach((x) => { x.checked = false; });
+    }
+    if (form && ev.target.checked && ev.target.matches('[data-assign-one]')) {
+      const allBox = $('[data-assign-all]', form);
+      if (allBox) allBox.checked = false;
+    }
   });
   document.addEventListener('submit', (ev) => {
     const fn = forms[ev.target.id];
@@ -1684,7 +1956,7 @@
     try {
       setMe((await call('GET', '/api/state')).state);
     } catch (_) { /* offline: alter Stand bleibt */ }
-    if (ui.view === 'team') await route();
+    if (ui.view === 'team' || ui.view === 'aufgaben' || ui.view === 'heute') await route();
     else render();
   });
   setInterval(tick, 1000);
@@ -1692,6 +1964,8 @@
     if (document.hidden || !session) return;
     if (getQueue().length) flushQueue();
     if (ui.view === 'team' && !ui.subjectId && !$('#dlg').open) loadTeam().then(render);
+    if (ui.view === 'heute' && !$('#dlg').open && !document.activeElement.matches('input, select, textarea')) loadMyTasks().then(render);
+    if (ui.view === 'aufgaben' && !$('#dlg').open) loadAdminTasks().then(render);
   }, 60000);
 
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
